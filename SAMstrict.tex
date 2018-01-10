@@ -55,9 +55,37 @@ they require input files to be \textit{SAM strict compliant}.
 
 \end{abstract}
 
+\section{Headers}
+
 \section{General}
 
+\subsection{CIGAR}
+
+\paragraph{}
+
+All CIGAR operators must have a non-zero positive length
+
+\paragraph{}
+
+All adjacent CIGAR operators must be different.
+
 \subsection{Mate alignments}
+
+\paragraph{}
+
+Unmapped reads must have the RNAME and POS identical to that of the first mapped read
+from the originating template. For paired-end or mate-pair sequencing, this equivalent
+to setting the RNAME/POS of unmapped reads to the RNAME/POS of the mate.
+
+\paragraph{}
+
+If all segments in a template are unmapped, RNAME must be set as `*' and POS as 0.
+
+\subsection{Reference bounds}
+
+\paragraph{}
+
+Read alignments must not extend past the start or end of the aligned RNAME.
 
 \section{SAM Tags}
 
@@ -108,7 +136,11 @@ match the record \textit{NM} tag value.
 
 \paragraph{}
 
-All records except 1 in a \textit{SA record set} must have the supplementary flag set.
+All records except 1 in a \textit{SA record set} must have the 0x800 (supplementary alignment) FLAG bit set.
+
+\paragraph{}
+
+The first SA record in all supplementary alignment records must be the canonical non-supplementary alignment.
 
 \paragraph{}
 
