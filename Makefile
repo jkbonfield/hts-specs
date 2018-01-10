@@ -7,6 +7,7 @@ PDFS =	BCFv1_qref.pdf \
 	CSIv1.pdf \
 	SAMv1.pdf \
 	SAMtags.pdf \
+	SAMstrict.pdf \
 	tabix.pdf \
 	VCFv4.1.pdf \
 	VCFv4.2.pdf \
@@ -21,6 +22,7 @@ new/CRAMv2.1.pdf: CRAMv2.1.tex new/CRAMv2.1.ver
 new/CRAMv3.pdf: CRAMv3.tex new/CRAMv3.ver
 new/SAMv1.pdf: SAMv1.tex new/SAMv1.ver
 new/SAMtags.pdf: SAMtags.tex new/SAMtags.ver
+new/SAMstrict.pdf: SAMstrict.tex new/SAMstrict.ver
 new/VCFv4.1.pdf: VCFv4.1.tex new/VCFv4.1.ver
 new/VCFv4.2.pdf: VCFv4.2.tex new/VCFv4.2.ver
 new/VCFv4.3.pdf: VCFv4.3.tex new/VCFv4.3.ver

@@ -1,0 +1,153 @@
+\documentclass[10pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{longtable}
+\usepackage[pdfborder={0 0 0},hyperfootnotes=false]{hyperref}
+\usepackage[title]{appendix}
+
+\newcommand{\mailtourl}[1]{\href{mailto:#1}{\tt #1}}
+\newcommand{\tagvalue}[1]{\tt #1}
+\newcommand{\tagregex}[1]{\tt #1}
+
+\begin{document}
+
+\input{SAMstrict.ver}
+\title{Sequence Alignment/Map Strict Specification}
+\author{The SAM/BAM Format Specification Working Group}
+\date{\headdate}
+\maketitle
+\begin{quote}\small
+The master version of this document can be found at
+\url{https://github.com/samtools/hts-specs}.\\
+This printing is version~\commitdesc\ from that repository,
+last modified on the date shown above.
+\end{quote}
+\vspace*{1em}
+
+\noindent
+This document is a companion to the {\sl Sequence Alignment/Map Format
+Specification} that defines the SAM file format.\footnote{See
+\href{http://samtools.github.io/hts-specs/SAMv1.pdf}{\tt SAMv1.pdf} at \url{https://github.com/samtools/hts-specs}.}
+The SAM file format defines the syntax required for a file to be
+a valid SAM file. It does not require such files to be semantically
+valid and internally consistent.
+This document describes a set of additional semantic restrictions
+for which the subset of syntactically valid SAM files that comply
+with these restrictions can be described as \textit{SAM strict
+compliant}.
+
+\renewcommand{\abstractname}{Introduction}
+\begin{abstract}
+
+The SAM specifications have been instrumental in standardising
+the file formats used for sequence alignment. A large ecosystem of
+bioinformatics tools is now capable of reading and/or writing
+SAM files. Unfortunately, many tools that read SAM files are tightly
+coupled to a particular upstream tool 
+and fail to correctly execute on valid SAM files written by other
+tools. In part, this is due to the lack of semantic restrictions
+inherent in the SAM file format. A syntactically valid SAM file
+can be both internally inconsistent and semantically nonsensical.
+
+The purpose of this document is to provide a baseline of semantic
+validity for which tools should comply with when outputing SAM
+files, and tools which input SAM files can safely assume when
+they require input files to be \textit{SAM strict compliant}.
+
+\end{abstract}
+
+\section{General}
+
+\subsection{Mate alignments}
+
+\section{SAM Tags}
+
+\subsection{Standard Tags}
+
+\paragraph{}
+
+No record can include any reserved tags not defined in the
+{\sl Sequence Alignment/Map Optional Fields Specification}.
+Non-standard tags must start X, Y, Z or a lowercase letter as per the SAM specifications.
+
+\paragraph{}
+
+The \textit{type} of all \textit{standard tags} must match the type
+defined in the {\sl Sequence Alignment/Map Optional Fields Specification}.
+
+\subsection{SA}
+
+For the purpose of this section, a \textit{SA record set} is a set of SAM records
+from a single \textit{read} which collectively represent a single \textit{chimeric alignment}.
+
+\paragraph{}
+
+All records referenced in the SA tag of a given record must have a SA tag defined.
+
+\paragraph{}
+
+All records referenced in the SA tag of a given record must include the given
+record in their SA tag.
+
+\paragraph{}
+
+All records in a \textit{SA record set} with a FI tag defined must have the same FI tag value.
+
+\paragraph{}
+
+All records referenced in the SA tag must exist with matching \textit{rname, pos, strand, CIGAR}.
+
+\paragraph{}
+
+The SA \textit{mapq} of all references to a given record in a \textit{SA record set} must
+match the record mapping quality.
+
+\paragraph{}
+
+The SA \textit{NM} of all references to a given record in a \textit{SA record set} must
+match the record \textit{NM} tag value.
+
+\paragraph{}
+
+All records except 1 in a \textit{SA record set} must have the supplementary flag set.
+
+\paragraph{}
+
+All records in a \textit{SA record set} must have the same 0x100 (secondary alignment) FLAG bit.
+
+\paragraph{}
+
+All records in a \textit{SA record set} must have FLAG bit 0x4 (segment unmapped) not set.
+
+\paragraph{}
+
+All records in a \textit{SA record set} must have the same RNEXT.
+
+\paragraph{}
+
+All records in a \textit{SA record set} must have the same PNEXT.
+
+\paragraph{}
+
+All records in a \textit{SA record set} must have CIGARs with matching read length. That is,
+chimeric alignment records must include either soft clipping or hard clipping CIGAR operations
+for read bases which were not aligned.
+
+\paragraph{}
+
+All records in a \textit{SA record set} with SEQ not equal to * must have a SEQ consistent
+with all other records in the \textit{SA record set}. That is, chimeric alignments that define
+a segment sequence must be consistent with all other records defining a segment sequence. For
+example, 10th base in a read cannot be be A in one chimeric alignment, but T in another.
+
+\paragraph{}
+
+All records in a \textit{SA record set} with QUAL not equal to * must have a SEQ consistent
+with all other records in the \textit{SA record set}.
+
+\paragraph{}
+
+All records in a \textit{SA record set} must align at least one read base that does not
+overlap with any other alignments in the \textit{SA record set}.
+That is, a chimeric alignment cannot contain superfluous alignment records.
+
+\end{document}
