@@ -7,6 +7,8 @@
 \newcommand{\rulename}[1]{\tt #1}
 \newcommand{\rulecategory}[1]{\tt #1}
 \newcommand{\samrule}{\tt SAM}
+\newcommand{\v15}{\tt v1.5}
+\newcommand{\vcf43}{\tt VCFv4.3}
 % #1: error message
 % #2: rule description
 % #3: categories
@@ -109,7 +111,8 @@ they require input files to be \textit{SAM strict compliant}.
 \section{Headers}
 \samstrictrule{Undefined reserved header present}{Upper-case header record type codes are not defined in the SAM specifications must not be used.}
 \samstrictrule{Undefined header tag present}{Upper-case header tags not defined in the SAM specifications must not be used.}
-\samstrictrule{Malformed header}{Header lines must start with conform to either the {\tt
+\samstrictrule{Tag present as both lowercase and uppercase}{A file should not contain the same tag in both upper-case and lowercase format. See the SAM specifications header tags best practice footnote.}
+\samstrictrule{Malformed header}{Header lines with conform to either the {\tt
   /\char94@[A-Z][A-Z](\char92t[A-Za-z][A-Za-z0-9]:[
   -\char126]+)+\$/} or {\tt /\char94@CO\char92t.*/} or {\tt /\char94@CO\char92t.*/} regex.}{\samrule}
 
@@ -153,16 +156,6 @@ they require input files to be \textit{SAM strict compliant}.
 \headertagunique{PG}{ID}{\samrule}
 \samstrictrule{Invalid PG header PP tag}{The PG header PP tag must contain one of the program groups specified in an ID tag of a PG header.}
 
-
-
-\paragraph{}
-
-@SQ SN fields must be unique. Multiple headers with the same SN must not be present.
-
-\paragraph{}
-
-Every SAM record with an non-* RNAME must have a corresponding @SQ header with matching SN.
-
 \section{General}
 
 \subsection{File Format}
@@ -176,6 +169,7 @@ Every SAM record with an non-* RNAME must have a corresponding @SQ header with m
 
 \samstrictrule{Record ordering does not match HD header SO tag}{The order of records must be consistent with the HD header SO tag}
 \samstrictrule{Record ordering does not match HD header GO tag}{The order of records must be consistent with the HD header GO tag}
+\samstrictrule{Orphaned unmapped read}{If a read is unmapped, RNAME and POS must either be * and 0, or the RNAME and POS of another read from the same template.}
 
 \section{Records}
 
@@ -185,29 +179,33 @@ Every SAM record with an non-* RNAME must have a corresponding @SQ header with m
 \samstrictrule{Invalid character in QNAME}{QNAME fields must conform to the regex {TT \verb:[!-?A-~]}}{\samrule}
 
 \subsection{FLAG}
-
 \samstrictrule{Incorrect FLAG 0x1}{All templates with multiple segments must have FLAG 0x1 set}
 \samstrictrule{Incorrect FLAG 0x1}{All templates with a single segment must not have FLAG 0x1 set}
 \samstrictrule{Inconsistent FLAG 0x1}{All records with the same QNAME must have the same FLAG 0x1 value}
 \samstrictrule{Inconsistent FLAG 0x2}{All primary records with the same QNAME must have the same FLAG 0x2 value}
 \samstrictrule{Missing primary alignment record}{No supplementary or secondary alignments may exist for reads with an unmapped with primary alignment.}{\samrule}
+\samstrictrule{Inconsistent FLAGs 0x1 0x2}{The 0x2 FLAG must not be set if the 0x1 FLAG is not.}
+\samstrictrule{Inconsistent FLAGs 0x1 0x8}{The 0x8 FLAG must not be set if the 0x1 FLAG is not.}
+\samstrictrule{Inconsistent FLAGs 0x1 0x20}{The 0x20 FLAG must not be set if the 0x1 FLAG is not.}
+\samstrictrule{Inconsistent FLAGs 0x1 0x40}{The 0x40 FLAG must not be set if the 0x1 FLAG is not.}
+\samstrictrule{Inconsistent FLAGs 0x1 0x80}{The 0x80 FLAG must not be set if the 0x1 FLAG is not.}
+\samstrictrule{Inconsistent FLAGs 0x2 0x4}{The 0x2 FLAG must not be set if 0x4 is set in any primary alignments in the template}
 \samstrictrule{Inconsistent FLAGs 0x4 0x8}{The 0x8 FLAG for primary record for each segment must match the 0x4 FLAG of the primary record for the next segment in the template}
-
-TODO: 0x10 and 0x20
-
-\samstrictrule{Inconsistent FLAGs 0x1 0x40}{FLAG 0x40 should only be set if FLAG 0x1 is set}
+\samstrictrule{Inconsistent FLAG 0x10 0x20}{The 0x20 FLAG must match the 0x10 FLAG for the primary alignment of the next segment in the template}
+\samstrictrule{FLAG 0x20 set on unmapped read}{The 0x10 FLAG must not be set if the 0x4 FLAG is is set.}
 \samstrictrule{Duplicate first segment primary records}{Of the primary records with the same QNAME, at most one can have FLAG 0x40 set}
 \samstrictrule{Missing first segment primary record}{Of the records with the same QNAME with 0x1 FLAG, at least one record must have FLAG 0x40 set.}
-\samstrictrule{Inconsistent FLAGs 0x1 0x80}{FLAG 0x80 should only be set if FLAG 0x1 is set}
 \samstrictrule{Duplicate last segment primary records}{Of the primary records with the same QNAME, at most one can have FLAG 0x80 set}
 \samstrictrule{Missing last segment primary record}{Of the records with the same QNAME with 0x1 FLAG, at least one record must have FLAG 0x80 set.}
-\samstrictrule{Multiple primary alignment records}{Each segment must have exactly one record with FLAG 0x100 and 0x800 not set.}{\samrule}
-
-TODO
+\samstrictrule{Multiple primary alignment records}{Each segment must have at most one record with FLAG 0x100 and 0x800 not set.}{\samrule}
+\samstrictrule{Missing primary alignment record}{Each segment must have at least one record with FLAG 0x100 and 0x800 not set.}{\samrule}
+\samstrictrule{Unknown FLAG bit set}{FLAG bits higher than 0x800 must not be set}{\samrule}
 
 \subsection{RNAME}
-
-TODO
+\samstrictrule{Malformed RNAME}{RNAME must conform to the regex {\tt \char92*|[!-()+-\char60\char62-\char126][!-\char126]*}}{\samrule}
+\samstrictrule{RNAME not present in reference}{RNAME must be equal to the value of one of the SQ SN values defined in the header.}
+\samstrictrule{RNAME contains character not supported by VCFv4.3}{RNAME must not contain any of the following characters: {\tt \char60\char62\char91\char93\char58\char42}}{\vcf43}
+\samstrictrule{RNAME not supported by VCFv4.3}{RNAME must be not be one of {\tt DEL}, {\tt INS}, {\tt DUP}, {\tt INV}, {\tt CNV}, or {\tt BND}.}{\vcf43}
 
 \subsection{POS}
 \samstrictrule{Record placed outside of reference sequence}{If FLAG 0x4 is not set, POS must be between 0 and the length of the RNAME reference sequence inclusive. The length of the RNAME reference sequence can be found in the SQ header LN tag value for the SQ header with a SN tag matching the RNAME.}
@@ -218,26 +216,97 @@ TODO
 
 \subsection{MAPQ}
 
-TODO
-
-
 \subsection{CIGAR}
 \samstrictrule{Invalid CIGAR}{All CIGAR strings must conform to the regex {\tt \char92*|([0-9]+[MIDNSHPX=])+}}{\samrule}
 \samstrictrule{Empty CIGAR}{All CIGAR strings must have at least one CIGAR operator}
 \samstrictrule{Zero length CIGAR operator}{All CIGAR operators must have a non-zero positive length}
 \samstrictrule{CIGAR contains operator repeat}{All adjacent CIGAR operators must be different.}
 \samstrictrule{CIGAR does not contain any mapped bases}{All CIGARs must include a CIGAR operator that consumes a reference base.}{\samrule}
-\samstrictrule{Incorrect CIGAR length}{Unless SEQ is *, the number of query bases consumed by a record CIGAR must match the number of bases in SEQ}{\samrule}
-\samstrictrule{Read alignment }
+	{\tt Should we allow alignments with zero mapped bases? Seven bridges has a graph-based aligner that will
+emit CIGARs such as 100I for alignments that align to a known insertion that is not included in the reference. Useful for local assembly but technical voilates the SAM specifications}
+\samstrictrule{Incorrect CIGAR length}{Sum of lengths of the M/I/S/=/X operations must equal the length of SEQ when both CIGAR and SEQ are available.}{\samrule}
+\samstrictrule{Invalid CIGAR hard clip}{H must only be present as the first and/or last operation.}{\samrule}
+\samstrictrule{Invalid CIGAR soft clip}{S must only have H operations between them and the ends of the CIGAR string.}{\samrule}
+\samstrictrule{CIGAR overhangs reference sequence}{POS plus the number of reference bases consumed by the CIGAR must not exceed the length of the RNAME reference sequence.}
+\samstrictrule{Inconsistent CIGAR read lengths}{All mapped alignments for a given segment must have matching read lengths. That is, the sum of lengths of the M/I/S/=/X/H operations must be equal.}
+
+\samstrictrule{Unusual indel positioning}{TODO: should we disallow I/D operators at the ends of reads? There was some ambiguity as to how deletions interacted with POS but I think the spec has been updated in favour of the BWA interpretation since that discussion.}
+
+\subsection{RNEXT}
+\samstrictrule{Invalid RNEXT}{If the template contains one segment RNEXT must be *}
+\samstrictrule{RNEXT not present in reference}{RNEXT must be equal to the value of one of the SQ SN values defined in the header.}
+\samstrictrule{Invalid RNEXT}{If the primary alignment of the next read in the template is mapped, RNEXT must not be {\tt *}}{\samrule}
+\samstrictrule{RNEXT not using =}{If the primary alignment of the next read in the template is mapped to the same reference sequence, RNEXT must be {\tt =}}{\samrule}
+\samstrictrule{Incorrect RNEXT}{If this read is unmapped or the primary alignment of the next read in the template is mapped to the a different reference sequence, RNEXT must match the RNAME of the next read.}
+
+\subsection{PNEXT}
+\samstrictrule{Invalid PNEXT}{If the template contains one segment PNEXT must be 0}
+\samstrictrule{Incorrect PNEXT}{If the primary alignment of the next read in the template is unmapped, PNEXT must be 0}
+\samstrictrule{Incorrect PNEXT}{If the primary alignment of the next read in the template is mapped, PNEXT must match the POS of that record.}
+
+\subsection{TLEN}
+TODO: can we actually do anything for this?
+
+\subsection{SEQ}
+\samstrictrule{Inconsistent SEQ read lengths}{All alignments of a given segment must have consistent SEQ lengths. That is, for all non-* SEQ, SEQ + length of CIGAR hard clip must be equal. }
+\samstrictrule{Inconsistent SEQ sequences}{All alignments of a given segment must have consistent base calls. A base cannot be called an A in one record, but a T in another. Note that to determine the read base, both the 0x10 FLAG, and any hard clipping CIGAR operators need to be taken into account.}
+
+TODO: I am up to here
+
+\subsection{QUAL}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 \paragraph{}
 
-TODO: should we disallow I/D operators at the ends of reads? There was some ambiguity as to how deletions interacted with POS but I think the spec has been updated in favour of the BWA interpretation since that discussion.
+
 \paragraph{}
 
-Should we allow alignments with zero mapped bases? Seven bridges has a graph-based aligner that will
-emit CIGARs such as 100I for alignments that align to a known insertion that is not included in the reference.
-Useufl for local assembly but technical voilates the SAM specifications
+
 
 
 \subsection{TODO: categorize}
@@ -383,5 +452,11 @@ All records in a \textit{SA record set} must have FLAG bit 0x4 (segment unmapped
 All records in a \textit{SA record set} must align at least one read base that does not
 overlap with any other alignments in the \textit{SA record set}.
 That is, a chimeric alignment cannot contain superfluous alignment records.
+
+
+
+- SEQ must match CIGAR
+- Read lengths must be consistent
+
 
 \end{document}
