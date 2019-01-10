@@ -6,6 +6,7 @@ PDFS =	BCFv1_qref.pdf \
 	CRAMv2.1.pdf \
 	CRAMv3.pdf \
 	crypt4gh.pdf \
+	CRAM_codecs.pdf \
 	CSIv1.pdf \
 	SAMv1.pdf \
 	SAMtags.pdf \
@@ -20,20 +21,21 @@ pdf: $(PDFS:%=new/%)
 %.pdf: new/%.pdf
 	cp $^ $@
 
-new/BEDv1.pdf    diff/BEDv1.pdf:    BEDv1.tex    new/BEDv1.ver
-new/CRAMv2.1.pdf diff/CRAMv2.1.pdf: CRAMv2.1.tex new/CRAMv2.1.ver
-new/CRAMv3.pdf   diff/CRAMv3.pdf:   CRAMv3.tex   new/CRAMv3.ver
-new/crypt4gh.pdf diff/crypt4gh.pdf: crypt4gh.tex new/crypt4gh.ver
-new/SAMv1.pdf    diff/SAMv1.pdf:    SAMv1.tex    new/SAMv1.ver
-new/SAMtags.pdf  diff/SAMtags.pdf:  SAMtags.tex  new/SAMtags.ver
-new/VCFv4.1.pdf  diff/VCFv4.1.pdf:  VCFv4.1.tex  new/VCFv4.1.ver
-new/VCFv4.2.pdf  diff/VCFv4.2.pdf:  VCFv4.2.tex  new/VCFv4.2.ver
-new/VCFv4.3.pdf  diff/VCFv4.3.pdf:  VCFv4.3.tex  new/VCFv4.3.ver
+new/BEDv1.pdf       diff/BEDv1.pdf:       BEDv1.tex       new/BEDv1.ver
+new/CRAMv2.1.pdf    diff/CRAMv2.1.pdf:    CRAMv2.1.tex    new/CRAMv2.1.ver
+new/CRAMv3.pdf      diff/CRAMv3.pdf:      CRAMv3.tex      new/CRAMv3.ver
+new/CRAM_codecs.pdf diff/CRAM_codecs.pdf: CRAM_codecs.tex new/CRAM_codecs.ver
+new/crypt4gh.pdf    diff/crypt4gh.pdf:    crypt4gh.tex    new/crypt4gh.ver
+new/SAMv1.pdf       diff/SAMv1.pdf:       SAMv1.tex       new/SAMv1.ver
+new/SAMtags.pdf     diff/SAMtags.pdf:     SAMtags.tex     new/SAMtags.ver
+new/VCFv4.1.pdf     diff/VCFv4.1.pdf:     VCFv4.1.tex     new/VCFv4.1.ver
+new/VCFv4.2.pdf     diff/VCFv4.2.pdf:     VCFv4.2.tex     new/VCFv4.2.ver
+new/VCFv4.3.pdf     diff/VCFv4.3.pdf:     VCFv4.3.tex     new/VCFv4.3.ver
+new/VCFv4.4.pdf     diff/VCFv4.4.pdf:     VCFv4.4.tex     new/VCFv4.4.ver
 new/VCFv4.4.draft.pdf  diff/VCFv4.4.draft.pdf:  VCFv4.4.draft.tex  new/VCFv4.4.draft.ver
 
 # Set LATEXMK to "scripts/rerun.sh new/$* $(PDFLATEX)" to use the previous
 # controller script, e.g., if your installation does not have latexmk.
-
 PDFLATEX = pdflatex
 LATEXMK  = latexmk $(LATEXMK_ENGINE) $(LATEXMK_FLAGS)
 LATEXMK_ENGINE = --pdf --pdflatex='$(PDFLATEX)'
