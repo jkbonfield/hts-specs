@@ -1,0 +1,650 @@
+%&pdfLaTeX
+% !TEX encoding = UTF-8 Unicode
+\documentclass[a4paper]{article}
+\usepackage{ifxetex}
+\ifxetex
+\usepackage{fontspec}
+\setmainfont[Mapping=tex-text]{STIXGeneral}
+\else
+\usepackage[T1]{fontenc}
+\usepackage[latin1]{inputenc}
+\fi
+\usepackage{textcomp}
+
+\usepackage{graphicx}
+\usepackage{array}
+\usepackage{ulem}
+\usepackage{fixltx2e}
+\usepackage{amssymb}
+\usepackage{fancyhdr}
+\usepackage{amsmath}
+\usepackage{algpseudocode}
+\usepackage{threeparttable}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+
+\setlength{\parindent}{0cm}
+\setlength{\parskip}{0.18cm}
+\usepackage[hmargin=2cm,vmargin=2.5cm,bindingoffset=0.0cm]{geometry}
+\usepackage[pdfborder={0 0 0}]{hyperref}
+\begin{document}
+
+
+
+\input{CRAMv3.ver}
+\title{CRAM format specification (version 4.0)}
+\author{samtools-devel@lists.sourceforge.net}
+\date{\headdate}
+\maketitle
+
+
+\begin{quote}\small
+The master version of this document can be found at
+\url{https://github.com/samtools/hts-specs}.\\
+This printing is version~\commitdesc\ from that repository,
+last modified on the date shown above.
+\end{quote}
+
+\begin{center}
+\textit{license: Apache 2.0}
+\end{center}
+\vspace*{1em}
+
+\newlength{\maxwidth}
+\newcommand{\algalign}[2] % #1 = text to left, #2 = text to right
+{\makebox[\maxwidth][l]{$#1{}$}${}#2$}
+
+\makeatletter
+\newcommand*{\bdiv}{%
+  \nonscript\mskip-\medmuskip\mkern5mu%
+  \mathbin{\operator@font div}\penalty900\mkern5mu%
+  \nonscript\mskip-\medmuskip
+}
+\newcommand*{\bitand}{%
+  \nonscript\mskip-\medmuskip\mkern5mu%
+  \mathbin{\operator@font AND}\penalty900\mkern5mu%
+  \nonscript\mskip-\medmuskip
+}
+\newcommand*{\bitor}{%
+  \nonscript\mskip-\medmuskip\mkern5mu%
+  \mathbin{\operator@font OR}\penalty900\mkern5mu%
+  \nonscript\mskip-\medmuskip
+}
+\newcommand*{\bitxor}{%
+  \nonscript\mskip-\medmuskip\mkern5mu%
+  \mathbin{\operator@font XOR}\penalty900\mkern5mu%
+  \nonscript\mskip-\medmuskip
+}
+\makeatother
+
+\subsection*{FQZComp quality codec}
+
+The FQZComp quality codec uses an adaptive statistical model to
+predict the next quality value in a given context (comprised of
+previous quality values, position along this sequence, whether the
+sequence is the second in a pair, and a running total of number of
+times the quality has changed in this sequence).
+
+For each quality value, the models produce probabilities for all
+possible next quality values, which are passed into an arithmetic
+entropy encoder to encode or decode the actual next quality value.
+The models are then updated based on the actual next quality in order
+to learn the statistical properties of the quality data stream.  This
+step wise update process is identical for both encoding and decoding.
+
+The algorithm is a generalisation on the original fqzcomp program,
+described in \textit{Compression of FASTQ and SAM Format Sequencing
+  Data} by Bonfield JK, Mahoney MV (2013). PLoS ONE 8(3):
+e59190. \url{https://doi.org/10.1371/journal.pone.0059190}
+
+\subsubsection*{Range coding}
+
+The range coder is a byte-wise arithmetic coder that operates by
+repeatedly reducing a probability range (0.0 to 1.0) one symbol (byte)
+at a time with the complete compressed data can be represented by any
+value within the final range.
+
+This is easiest demonstrated with a worked example, so let us imagine
+we have an alphabet of 4 symbols, `t', `c', `g', and `a' with
+probabilities 0.2, 0.3, 0.3 and 0.2 respectively.  We can construct a
+cumulative distribution table and apply probability ranges to each of
+the symbols:
+
+\begin{tabular}{rrrr}
+\hline
+\textbf{Symbol} & \textbf{Probability} & \textbf{Range low} & \textbf{Range high}\\
+\hline
+t & 0.2 & 0.0 & 0.2 \\
+c & 0.3 & 0.2 & 0.5 \\
+g & 0.3 & 0.5 & 0.8 \\
+a & 0.2 & 0.8 & 1.0 \\
+\hline
+\end{tabular}
+
+As a \emph{conceptual example} (note: this is not how it is implemented in practice, see below) using arbitrary precision floating point mathematics this could operate as follows.
+
+If we wish to encode a message, such as ``cat'' then we will encode
+one symbol at a time (`c', `a', `t') successively reducing the
+initial range of 0.0 to 1.0 by the cumulative distribution for that
+symbol.  At each point the new range is adjusted to be the proportion
+of the previous range covered by the cumulative symbol range.  See the
+table footnotes below for the worked mathematics.
+
+\begin{threeparttable}[t]
+\begin{tabular}{rrrrr}
+\hline
+\textbf{Range low} & \textbf{Range high} & \textbf{Symbol} & \textbf{Symbol low} & \textbf{Symbol high}\\
+\hline
+0.000 & 1.000 & c & 0.2 & 0.5\\
+0.200 & 0.500 & a & 0.8 & 1.0\\
+0.440\tnote{\textbf{a}} & 0.500\tnote{\textbf{a}} & t & 0.0 & 0.2\\
+0.440 & 0.452 & <end>\\
+\hline
+\end{tabular}
+\begin{tablenotes}
+\item{\textbf{a.}} Old range 0.2 to 0.5 plus symbol range 0.8 to 1.0 gives an updated range of 0.44 to 0.5:\\
+ $0.2 + 0.8\times(0.5-0.2) = 0.44$\\
+$0.2 + 1.0\times(0.5-0.2) = 0.50$
+\end{tablenotes}
+\end{threeparttable}
+
+Our final range is 0.44 to 0.452 with any value in that range representing
+``cat'', thus 0.45 would suffice.  A pictorial example of this process is below.
+
+\includegraphics[height=250pt, keepaspectratio=true]{img/range_code.png}
+
+Decoding is simply the reverse of this.  In the above picture we can see that 0.45 would read off `c', `a' and `t' by repeatedly comparing the symbol ranges to the current range and using those to identify the symbol and produce a new range.
+
+\begin{threeparttable}[t]
+\begin{tabular}{rrrr}
+\hline
+\textbf{Range low} & \textbf{Range high} & \textbf{Fraction into range} & \textbf{Symbol}\\
+\hline
+0.000 & 1.000 & 0.450 & c\\
+0.200 & 0.500 & 0.833\tnote{\textbf{a}} & a\\
+0.440\tnote{\textbf{b}} & 0.500 & 0.167 & t\\
+\hline
+\end{tabular}
+\begin{tablenotes}
+\item{\textbf{a.}} 0.45 into range 0.2 to 0.5: $(0.45-0.2)/(0.5-0.2) = 0.833$.
+This falls within the 0.8 to 1.0 symbol range for `a'.
+\item{\textbf{b.}} `a' symbol range 0.8 to 1.0 applied to range 0.2 to 0.5:  $0.2+0.8\times(0.5-0.2) = 0.44$ and $0.2+1.0\times(0.5-0.2) = 0.5$.
+\end{tablenotes}
+\end{threeparttable}
+
+Note: The above example not how the actual implementation works\footnote{This implementation was designed by Eugene Shelwein.}.
+For efficiency, we use integer values having a starting range of 0 to $2^{32}-1$.
+We write out the top 8-bits of the range when low and high become close, permitting the range to be expanded again so we can avoid needing arbitrary precision variables.
+For example (with 16-bit values for brevity) if range is 0x37ba to 0x37f0 then we can write out the top 8 bits (0x37) and shift low and high ranges left by 8 bits (0xba00 to 0xf040).
+Care needs to be taken to cope with ranges that are numerically close but straddling a top byte value, such as 0x37fe to 0x3801.
+In this case we reduce the high range to avoid running out of precision (high = 0x37ff) prior to flushing.
+
+Pseudocode for the range codec decoding follows.  This implementation uses low and range instead of low and high, where $range = high - low$.
+\texttt{low} is a 64-bit unsigned integer while \texttt{range} and \texttt{code} (the next few bytes of the compressed data stream) are 32-bit unsigned integers.
+
+\textsc{RangeCreate} initialises the range coder, reading the first bytes of the compressed data stream.
+
+\begin{algorithmic}[1]
+\Procedure{RangeCreate}{}
+  \settowidth{\maxwidth}{range\ }
+  \State \algalign{low}{\gets} $0$\Comment{64-bit unsigned}
+  \State \algalign{range}{\gets} $2^{32}-1$\Comment{Maximum 32-bit unsigned value}
+  \State \algalign{code}{\gets} $0$\Comment{32-bit unsigned}
+  \For{$i \gets 0$ to $7$}
+    \State $code \gets (code << 8) + $\Call{ReadByte}{}
+  \EndFor
+\EndProcedure
+\end{algorithmic}
+
+Decoding each symbol is in two parts; getting the current frequency and updating the range.
+
+\begin{algorithmic}[1]
+\Function{RangeGetFreq}{$tot\_freq$}
+  \State $range \gets range / tot\_freq$
+  \State \Return $code / range$
+\EndFunction
+\end{algorithmic}
+
+\begin{algorithmic}[1]
+\Procedure{RangeDecode}{$sym\_low, sym\_freq, tot\_freq$}
+  \settowidth{\maxwidth}{range\ }
+  \State \algalign{temp}{\gets} $sym\_low \times range$\Comment{Temp is an unsigned 32-bit integer}
+  \State \algalign{low}{\gets} $low + temp$
+  \State \algalign{code}{\gets} $code - temp$
+  \State \algalign{range}{\gets} $range \times sym\_freq$
+  \While{$range < 2^{24}$} \Comment{Renormalise}
+    \If{$((low>>56) \ne ((low+range)>>56)$}\Comment{Close but straddles top byte}
+      \State $range = (low \bitor (2^{24}-1)) - low$
+    \EndIf
+    \State \algalign{code}{\gets} $(code<<8) + $\Call{ReadByte}{}
+    \State \algalign{range}{\gets} $(range<<8)$
+    \State \algalign{low}{\gets} $(low<<8)$
+  \EndWhile
+\EndProcedure
+\end{algorithmic}
+
+\subsubsection*{Statistical Modelling}
+
+The probabilities passed to the range coder may be fixed for all scenarios (as we had in the ``cat'' example), or they may be adaptive and context aware.
+For example the letter `u' occurs around 3\% of time in English text, but if the previous letter was `q' it is close to 100\% and if the previous letter was `u' it is close to 0\%.
+Using the previous letter is known as an Order-1 entropy encoder, but the context can be anything.
+We can also adaptively adjust our probabilities as we encode or
+decode, learning the likelihoods and thus avoiding needing to store
+frequency tables in the data stream covering all possible contexts.
+
+To do this we use a statistical model, containing an array of symbols $S$ and their frequencies $F$.
+The sum of these frequences must be less than $2^{16}-32$.
+When they get too high, they are renormalised by approximately halving the frequencies (ensuring none drop to zero).
+
+Typically an array of models are used where the array index represents the current context.
+
+To encode any symbol the entropy encoder needs to know the frequency of the symbol to encode, the cumulative frequencies of all symbols prior to this symbol, and the total of all frequencies.
+For decoding a cumulative frequency is obtained given the frequency total and the appropriate symbol is found matching this frequency.
+Symbol frequencies are updated after each encode or decode call and the symbols are kept in order of most-frequent symbol first in order to  reduce the overhead of scanning through the cumulative frequencies.
+
+\textsc{ModelCreate} initialises a model by setting every symbol to have a frequency of 1.
+(At no point do we permit any symbol to have zero frequency.)
+
+\begin{algorithmic}[1]
+\Procedure{ModelCreate}{$num\_sym$}
+  \State $total\_freq \gets num\_sym$
+  \State $max\_sym \gets num\_sym-1$
+  \For{$i \gets 0$ to $max\_sym$}
+    \State $S_i \gets i$
+    \State $F_i \gets 1$
+  \EndFor
+\EndProcedure
+\end{algorithmic}
+
+\textsc{ModelDecode} is called once for each decoded symbol.
+It returns the next symbol and updates the model frequencies automatically.
+
+\begin{algorithmic}[1]
+\Function{ModelDecode}{rc}
+  \State $freq \gets$ $rc.$\Call{RangeGetFrequency}{$total\_freq$}
+  \State $x \gets 0$
+  \State $acc \gets 0$
+  \While{$acc + F_x <= freq$}
+    \State $acc \gets acc + F_x$
+    \State $x \gets x+1$
+  \EndWhile
+  \State $rc.$\Call{RangeDecode}{$acc,\ F_x,\ total\_freq$}
+  \State $F_x \gets F_x + 8$ \Comment{Update model frequencies}
+  \State $total\_freq \gets total\_freq + 8$
+  \If{$total\_freq > 2^{16}-32$}
+    \State \Call{ModelRenormalise}{}
+  \EndIf
+  \State $sym \gets S_x$
+  \If{$x > 0$ and $F_x > F_{x-1}$}
+    \State $tmp \gets F_x$ \Comment{swap $F_x$ with $F_{x-1}$}
+    \State $F_x \gets F_{x-1}$
+    \State $F_{x-1} \gets tmp$
+    \State $tmp \gets S_x$ \Comment{swap $S_x$ with $S_{x-1}$}
+    \State $S_x \gets S_{x-1}$
+    \State $S_{x-1} \gets tmp$
+  \EndIf
+  \State \Return $sym$
+\EndFunction
+\end{algorithmic}
+
+\textsc{ModelRenormalise} is called whenever the total frequencies get too high.
+The frequencies are halved, taking sure to avoid any zeros.
+
+\begin{algorithmic}[1]
+\Procedure{ModelRenormalise}{}
+  \State $total\_freq \gets 0$
+  \For{$i \gets 0$ to $max\_sym$}
+    \State $F_i \gets F_i - (F_i \bdiv 2)$
+    \State $total\_freq \gets total\_freq + F_i$
+  \EndFor
+\EndProcedure
+\end{algorithmic}
+
+\subsubsection*{FQZComp Models}
+
+The FQZComp process utilises knowledge of the read lengths, complement
+(qualities reversed) status and strands (whether BAM flag READ2 is
+set), but in order to maintain a strict separation between data series
+these fields are stored (duplicated) within the quality data stream.
+It has discrete models for strand (whether READ1 or READ2 flag is
+set), whether the quality string is a duplicate of the previous line,
+quality string length, and the quality values themselves.  The strand,
+duplication and length models have no context, while the quality
+values have at most $2^{16}$ contexts, with the context construction
+being configured by parameters in the FQZComp data stream.
+
+The strand, complement and duplication models have a $max\_sym$ value
+of 2, being boolean choices.  There are 4 read length models each
+having $max\_sym$ of 256.  Each model is used for the 4 successive
+bytes in a 32-bit length value.  The quality models have a
+configurable size of $max\_sym$, based on the parameter specified in
+the data stream.
+
+The entropy encoder used is shared between all models, so the bit
+stream is multiplexed together.  The decode interface takes 2
+parameters: the model, and the range coder itself.
+
+The combined quality context is constructed by adding together
+quality, position, delta (a running total) and strand contexts.
+Each of these 4 components can be adjusted in the number of bits they
+occupy, the location in the combined context and also a divisor (by
+a power of 2) applied prior to the addition.  Note it is permissible
+to have contexts overlapping.
+
+Delta is a count of the number of times the quality value has changed
+from one value to a different one.  Thus a run of identical values
+will not increase delta.  Along with position, it gets reset to zero
+at the start of every record.  (FIXME: position is decremented from
+last base, not first.  Fix this?)
+
+\includegraphics[width=250pt, keepaspectratio=true]{img/fqz_bits.png}
+
+For simplicity of pseudocode, consider the variables set
+here to be accessable by all other FQZComp functions (i.e. global or
+class members).  In the tables and code below, prefix of `q' is for
+quality, `p' is for position, `d' is for delta and `s' is for strand.
+
+The above diagram would be defined using the following parameters:
+
+% Note we have a map for quality (qmap), but not for pos or delta.
+%
+% Potentially pos map could be useful if we wish to use a context of,
+% say, ``cycle 17 was duff but all others are fine''.  We map 100
+% cycles to a boolean (is cycle 17 or not) to reduce the context size
+% and speed up learning.
+%
+% We may also wish to have a dedicated qmap used purely for context
+% building, rather than also using it, as is now, for collapsing the
+% dispersed bins into neighbouring values of 0-N.  E.g. This may be
+% useful to distinguish quality of ``is max or not''?
+%
+% All of these are generalisations of using the division by shifting.
+% The map is a lookup table which can do that for us (but slower?).
+
+\begin{tabular}{lrl}
+\hline
+\textbf{Field} & \textbf{Value} & \textbf{Note}\\
+\hline
+qbits  & 9  & 3 bit each $\implies$ Order-3 Markov model \\
+qshift & 3  & E.g. HiSeq X 8-binned, as 3 bit qmap \\
+qloc   & 0  \\
+\hline
+pbits  & 3  & $pos / 32$, caps as pos 256\\
+pshift & 5  \\
+ploc   & 9  \\
+\hline
+dbits  & 3  & $delta / 4$, caps at 32\\
+dshift & 2  \\
+dloc   & 12 \\
+\hline
+sloc   & 15 & 1 bit, iff $do\_strand$ flag is set\\
+\hline
+\end{tabular}
+
+
+The start of an FQZComp data stream consists of the parameters used by
+the decoder. The data layout is as follows.
+
+\begin{tabular}{lllp{12cm}}
+\hline
+\textbf{Bits} & \textbf{Type} & \textbf{Name} & \textbf{Description}\\
+\hline
+8 & uint8 & $version$ & FQZComp format version: must be 5\\
+8 & uint8 & $flags$ & Bit-flags. From lowest bit to highest:\\
+& & & 1: $do\_qmap$: indicates quality map is present\\
+& & & 2: $do\_deup$: model\_dup will be used\\
+& & & 4: $do\_len$: model\_len will be used for every record, rather than first only.\\
+& & & 8: $do\_strand$: $model\_strand$ and $sloc$ will be used\\
+& & & 16: $do\_rev$: $model\_revcomp$ will be used. Must be set for CRAM v3.1\\
+8 & uint8 & $max\_sym$ & Total number of distinct quality values\\
+\hline
+%(if $do\_qmap$ is set)
+$8*max\_sym$ & uint8 & $qmap$ & Map for ``unbinning'' quality values from contiguous to discrete values. (FIXME: iff $do\_qmap$ is set)\\
+\hline
+4 & uint4 (low)  & qshift & Left bit shift per successive quality in quality context\\
+4 & uint4 (high) & qbits  & Number of bits for quality context\\
+4 & uint4 (low)  & pshift & Divisor (right shift) for position\\
+4 & uint4 (high) & pbits  & Number of bits for position context\\
+4 & uint4 (low)  & dshift & Divisor (right shift) for delta\\
+4 & uint4 (high) & dbits  & Number of bits for delta context\\
+4 & uint4 (low)  & sloc   & Bit position of strand context\\
+4 & uint4 (high) & qloc   & Bit position of quality context\\
+4 & uint4 (low)  & dloc   & Bit position of delta context\\
+4 & uint4 (high) & ploc   & Bit position of position context\\
+\hline
+$8*2^{dbits}$ & uint8 & dtab & Delta lookup table\\
+\hline
+\end{tabular}
+
+\textsc{DecodeFQZParams} below describes the pseudocode for reading
+the parameter block.
+
+\begin{algorithmic}[1]
+\Procedure{DecodeFQZParams}{}
+  \State $vers \gets $\Call{ReadByte}{}
+  \If{$vers \ne 5$}
+    \State ERROR
+  \EndIf
+  \settowidth{\maxwidth}{do\_strand\ }
+  \State \algalign{flags}{\gets} \Call{ReadByte}{}
+  \State \algalign{do\_rev}{\gets}    $flags\bitand 16$
+  \State \algalign{do\_strand}{\gets} $flags\bitand 8$
+  \State \algalign{do\_len}{\gets}    $flags\bitand 4$
+  \State \algalign{do\_dedup}{\gets}  $flags\bitand 2$
+  \State \algalign{do\_qmap}{\gets}   $flags\bitand 1$
+  \State \algalign{max\_sym}{\gets} \Call{ReadByte}{}
+  \If{$do\_qmap$}
+    \State $max\_sym \gets$ \Call{ReadByte}{}
+    \For{$i \gets 0$ to $nsym-1$}
+      \State $qmap_i \gets$ \Call{ReadByte}{}
+    \EndFor
+  \EndIf
+  \settowidth{\maxwidth}{qshift\ }
+  \State \algalign{x}{\gets} \Call{ReadByte}{}
+  \State \algalign{qshift}{\gets} $x \bmod 16$
+  \State \algalign{qbits}{\gets} $x \bdiv 16$
+  \State \algalign{qmax}{\gets} $2^{qbits}-1$
+  \State \algalign{x}{\gets} \Call{ReadByte}{}
+  \State \algalign{pshift}{\gets} $x \bmod 16$
+  \State \algalign{pbits}{\gets} $x \bdiv 16$
+  \State \algalign{x}{\gets} \Call{ReadByte}{}
+  \State \algalign{dshift}{\gets} $x \bmod 16$
+  \State \algalign{dbits}{\gets} $x \bdiv 16$
+  \State \algalign{dmax}{\gets} $2^{dbits}-1$
+  \State \algalign{x}{\gets} \Call{ReadByte}{}
+  \State \algalign{sloc}{\gets} $x \bmod 16$
+  \State \algalign{qloc}{\gets} $x \bdiv 16$
+  \State \algalign{x}{\gets} \Call{ReadByte}{}
+  \State \algalign{dloc}{\gets} $x \bmod 16$
+  \State \algalign{ploc}{\gets} $x \bdiv 16$
+  \State \algalign{dtab}{\gets} \Call{ReadArray}{$2^{dbits}$}
+\EndProcedure
+\end{algorithmic}
+
+\textsc{ReadArray} reads $n$ run-lengths to fill out an array $A$.
+All remaining array elements, up to the element 256, are copies of the
+last specified element. For example \textsc{ReadArray}(4) with input
+bytes \{1,2,0,3\} would return an array $A = \{0,1,1,3,3,3,3, (3 ...)\}$.
+
+\begin{algorithmic}[1]
+\Function{ReadArray}{n}
+\State $i \gets 0$
+\For{$v \gets 0$ to $n-1$}
+  \State $rlen \gets $\Call{ReadByte}{}
+  \For{$j \gets 0$ to $rlen-1$}
+    \State $A_i \gets v$
+    \State $i \gets i+1$
+  \EndFor
+\EndFor
+\State $v \gets A_{i-1}$
+\While{$i < 256$}
+  \State $A_i \gets v$
+  \State $i \gets i+1$
+\EndWhile
+\State \Return $A$
+\EndFunction
+\end{algorithmic}
+
+\textsc{FQZCreateModels} creates the decoder models based on the above parameters.
+
+\begin{algorithmic}[1]
+\Procedure{FQZCreateModels}{}
+  \State $rc \gets $\Call{RangeCreate}{}
+  \State $model\_strand \gets $\Call{ModelCreate}{$2$}
+  \State $model\_dup \gets $\Call{ModelCreate}{$2$}
+  \For{$i \gets 0$ to $3$}
+    \State $model\_len_i \gets $\Call{ModelCreate}{$256$}
+  \EndFor
+  \For{$i \gets 0$ to $2^{16}-1$}
+    \State $model\_qual_i \gets $\Call{ModelCreate}{$max\_sym$}
+  \EndFor
+  \If{$do\_rev$}
+    \State $model\_rev \gets $\Call{ModelCreate}{$2$}
+  \EndIf
+\EndProcedure
+\end{algorithmic}
+
+The main loop decodes data in the following order per read:  read
+length (if not fixed), the flag for whether this is read 2 (if
+needed), a bit flag to indicate if the quality is duplicated (if
+needed), followed by record length number of quality values using
+various data gathered since the start of this read as context.
+
+The output of this function is an array of quality values in the
+variable $output$, indexed with the $i^{th}$ value via $output_i$.
+The output buffer is a concatenation of all quality values for each
+record.  The record lengths are recorded, but note this is the number
+of qualities encoded in CRAM for this sequence record and this does
+not necessarily have to match the number of base calls (for example
+where qualities are explicitly specified for SNP bases but not
+elsewhere).
+
+\algnewcommand{\algorithmicgoto}{\textbf{go to}}%
+\algnewcommand{\Goto}[1]{\algorithmicgoto\ \texttt{#1}}%
+\algnewcommand{\Label}{\State\unskip}
+
+\begin{algorithmic}[1]
+  \Procedure{DecodeFQZ}{}
+  \If{$do\_len$}
+    \State $fixed\_len \gets $\Call{DecodeLength}{rc}
+  \EndIf
+  \Statex
+  \State $i \gets 0$\Comment{Position in total quality block}
+  \State $pos \gets 0$\Comment{Position in current sequence}
+  \Label \texttt{next\_record:}
+  \While{$i < buf\_len$}
+    \If{$pos = 0$}\Comment{Reset at start of each new record}
+    \If{$do\_len$}
+      \State $rec\_len \gets $\Call{DecodeLength}{rc}
+    \Else
+      \State $rec\_len \gets fixed\_len$
+    \EndIf
+    \State $pos \gets rec\_len$
+    \Statex
+    \If{$do\_rev$}
+      \State $rev_{rec} \gets model\_rev.$\Call{ModelDecode}{$rc$}
+      \State $len_{rec} \gets rec\_len$
+    \EndIf
+    \If{$do\_strand$}
+      \State $is\_read2 \gets model\_strand.$\Call{ModelDecode}{$rc$}
+    \EndIf
+    \Statex
+    \If{$do\_dedup$}
+      \State $is\_dup \gets model\_dup.$\Call{ModelDecode}{$rc$}
+      \If{$is\_dedup$}
+        \For{$j \gets 0$ to $rec\_len-1$}
+          \State $output_{i+j} \gets output_{i+j-rec\_len}$
+        \EndFor
+        \State $i \gets i+rec\_len$
+        \State $rec \gets rec+1$
+        \State \Goto{next\_record}
+%        \State continue\Comment{back to While loop}
+      \EndIf
+    \EndIf
+    \Statex
+    \State $ctx \gets 0$
+    \State $qctx \gets 0$
+    \State $qlast \gets 0$
+    \State $delta \gets 0$
+  \EndIf
+  \Statex
+  \State $q \gets model\_qual_{ctx}.$\Call{ModelDecode}{$rc$}
+  \Comment{Decode a single quality value}
+  \State $qual \gets qmap_q$
+  \State $output_i \gets qual$
+  \Statex
+  \State $qctx \gets (qctx << qshift) + q$\Comment{Update context}
+  \State $ctx \gets (qctx\bitand qmax) << qloc$
+  \If{$pbits > 0$}
+    \State $ctx \gets ctx + ($\Call{Min}{$pmax, pos>>pshift$}$ << ploc)$
+  \EndIf
+  \If{$do\_strand$}
+    \State $ctx \gets ctx + (is\_read2 << sloc)$
+  \EndIf
+  \If{$dbits > 0$}
+    \State $dmin \gets$ \Call{Min}{$255, delta>>pshift$}
+    \State $ctx \gets ctx + (dtab_{dmin} << dloc)$
+  \EndIf
+  \State $ctx \gets ctx\bitand (2^{16}-1)$
+  \Statex
+  \If{$qlast \ne qual$}
+    \State $delta \gets delta + 1$
+  \EndIf
+  \State $qlast \gets qual$
+  \State $i \gets i + 1$
+  \State $j \gets j - 1$
+\EndWhile
+\If{$do\_rev$}
+  \State \Call{ReverseQualities}{$output\ ,rev,\ len$}
+\EndIf
+\EndProcedure
+\end{algorithmic}
+
+Where \textsc{Min}($a,b$) returns the smallest integer value from $a$ and $b$.
+
+\begin{algorithmic}[1]
+  \Function{Min}{a,b}
+  \If{$a < b$}
+    \State \Return $a$
+  \Else
+    \State \Return $a$
+  \EndIf
+  \EndFunction
+\end{algorithmic}
+
+Read lengths are encoded as 4 8-bit bytes, each having its own model.
+
+\begin{algorithmic}[1]
+\Function{DecodeLength}{rc}
+\State $rec\_len \gets model\_len_0.$\Call{ModelDecode}{$rc$}
+\State $rec\_len \gets rec\_len + (model\_len_1.$\Call{ModelDecode}{$rc$}$ << 8)$
+\State $rec\_len \gets rec\_len + (model\_len_2.$\Call{ModelDecode}{$rc$}$ << 16)$
+\State $rec\_len \gets rec\_len + (model\_len_3.$\Call{ModelDecode}{$rc$}$ << 24)$
+\State \Return $last\_len$
+\EndFunction
+\end{algorithmic}
+
+For CRAMv4 quality values are stored in their original FASTQ
+orientation.  For CRAMv3 they are stored in their alignment
+orientation and it may be beneficial for compression purposes to
+reverse them first.  If so $do\_rev$ will be set and the
+\textsc{ReverseQualities} procedure called below after decoding.
+
+\begin{algorithmic}[1]
+\Procedure{ReverseQualities}{$qual,\ qual\_len,\ rev,\ len$}
+\State $rec \gets 0$
+\For{$i \gets 0$ to $qual\_len-1$}
+  \If{$rev_{rec} \ne 0$}
+    \State $k \gets len_{rec}-1$
+    \For{$j \gets 0$ to $len_{rec}/2$}
+      \State $tmp \gets qual_{i+j}$
+      \State $qual_{i+j} \gets qual_{i+k}$
+      \State $qual_{i+k} \gets tmp$
+    \EndFor
+  \EndIf
+\EndFor
+\EndProcedure
+\end{algorithmic}
+
+
+\end{document}
