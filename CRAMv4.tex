@@ -313,53 +313,118 @@ duplication and length models have no context, while the quality
 values have at most $2^{16}$ contexts, with the context construction
 being configured by parameters in the FQZComp data stream.
 
-The strand, complement and duplication models have a $max\_sym$ value
+The strand, complement and duplication models have a model $max\_sym$ value
 of 2, being boolean choices.  There are 4 read length models each
 having $max\_sym$ of 256.  Each model is used for the 4 successive
 bytes in a 32-bit length value.  The quality models have a
 configurable size of $max\_sym$, based on the parameter specified in
-the data stream.
+the fqzcomp header described below.
 
 The entropy encoder used is shared between all models, so the bit
-stream is multiplexed together.  The decode interface takes 2
-parameters: the model, and the range coder itself.
+stream is multiplexed together.
 
-The combined quality context is constructed by adding together
-quality, position, delta (a running total) and strand contexts.
-Each of these 4 components can be adjusted in the number of bits they
-occupy, the location in the combined context and also a divisor (by
-a power of 2) applied prior to the addition.  Note it is permissible
-to have contexts overlapping.
+The quality values are modelled using a combined 16-bit context.  This
+context is constructed by adding sub-contexts together consisting of
+previous quality values, position along the current record, a running
+count (per record) of how many times the quality value has differed to
+the previous one (delta), and the strand (whether the current record
+is flagged as READ2), each shifted to a defined location within the
+combined context value ($qloc$, $ploc$, $dloc$ and $sloc$
+respectively).  The numeric values for each of these components can be
+passed through a lookup table ($qtab$ for quality, $ptab$ for
+positions and $dtab$ for running delta).  These convert the
+monotonically increasing range 0$\rightarrow$M to a monotonically
+increasing 0$\rightarrow$N.  For example if we wish to use the
+approximate position, we may uniformly map 0$\rightarrow$99 to
+0$\rightarrow$7 to utilise 3 bits of our 16-bit combined context.
+
+As some sequencing instruments produce binned qualities, eg 0, 10, 25,
+35, these values are squashed to incremental values from 0 to
+$max\_sym-1$ where $max\_sym$ is the maximum number of distinct
+quality values observed.  If this transform is required, the flag
+$have\_qmap$ will be set and a mapping table ($qmap$) will hold the
+original quality values.  These should be referenced once each value
+has been decoded.
+
+The quality sub-context is constructed by shifting left the previous
+quality sub-context by $qshift$ bits and adding the current quality
+after passing through the $qmap$ squashing process and if defined
+through the $qtab$ lookup table.  The quality context is limited to
+$qbits$ long and is added to the combined context starting at bit
+$qloc$.  The quality sub-context is reset to zero at the start of each
+new record.
+\footnote{For example if we have 4 quality values in use -- 0, 10, 25 and
+35 -- we will be encoding quality values 0, 1, 2 and 3.  We may wish to
+define $qbits$ to be 6 and $qshift$ to be 2 such that the previous 3
+quality values can be used as context, for the prediction of the next
+quality value.  There will likely be little reason to use $qtab$ in
+this scenario, but an encoder could define $qtab$ to convert \{0, 1, 2, 3\}
+to \{0, 0, 0, 1\} and use $qshift$ of 1 instead, giving us
+knowledge of which of the previous 6 values were maximum quality.}
+
+The position context is simply the offset along the current record
+(starting at zero).  (FIXME: current code decrements position from
+last base to first.  Fix this!)  As with the quality context it may be
+passed through a lookup table $ptab$ before shifting left by $ploc$
+bits and adding to the combined context.
 
 Delta is a count of the number of times the quality value has changed
 from one value to a different one.  Thus a run of identical values
-will not increase delta.  Along with position, it gets reset to zero
-at the start of every record.  (FIXME: position is decremented from
-last base, not first.  Fix this?)
+will not increase delta.  It gets reset to zero at the start of every
+record.  It may be adjusted by the $dtab$ lookup table and is shifted
+by $dloc$ before adding to the combined context.
+
+The start of an FQZComp data stream consists of the parameters used by
+the decoder. The data layout is as follows.
+
+\begin{tabular}{lllp{10cm}}
+\hline
+\textbf{Bits} & \textbf{Type} & \textbf{Name} & \textbf{Description}\\
+\hline
+8 & uint8 & $version$ & FQZComp format version: must be 5\\
+8 & uint8 & $flags$ & Bit-flags. From lowest bit to highest:\\
+& & & 1: $have\_qmap$: indicates quality map is present\\
+& & & 2: $do\_deup$: model\_dup will be used\\
+& & & 4: $do\_len$: model\_len will be used for every record, rather than first only.\\
+& & & 8: $do\_strand$: $model\_strand$ and $sloc$ will be used\\
+& & & 16: $do\_rev$: $model\_revcomp$ will be used. Must be set for CRAM v3.1\\
+& & & 32: $have\_ptab$: Load $ptab$, otherwise position contexts are unused\\
+& & & 64: $have\_dtab$: Load $dtab$, otherwise delta contexts are unused\\
+& & & 128: $have\_qtab$: Load $qtab$, otherwise set $qtab_i = i$\\
+8 & uint8 & $max\_sym$ & Total number of distinct quality values\\
+\hline
+\multicolumn{4}{l}{\textit{If have\_qmap flag is set:}}\\
+$8*max\_sym$ & uint8 & $qmap$ & Map for ``unbinning'' quality values.\\
+\hline
+4 & uint4 (low)  & qshift & Left bit shift per successive quality in quality context\\
+4 & uint4 (high) & qbits  & Total number of bits for quality context\\
+4 & uint4 (low)  & sloc   & Bit position of strand context\\
+4 & uint4 (high) & qloc   & Bit position of quality context\\
+4 & uint4 (low)  & dloc   & Bit position of delta context\\
+4 & uint4 (high) & ploc   & Bit position of position context\\
+\hline
+\multicolumn{4}{l}{\textit{If have\_qtab flag is set:}}\\
+variable & uint8 & $qtab$ & Quality context lookup table\\
+\hline
+\multicolumn{4}{l}{\textit{If have\_qtab flag is set:}}\\
+variable & uint8 & $ptab$ & Position context lookup table\\
+\hline
+\multicolumn{4}{l}{\textit{If have\_qtab flag is set:}}\\
+variable & uint8 & $dtab$ & Delta context lookup table\\
+\hline
+\end{tabular}
+
+As an example configuration, with 8 distinct quality values we would
+use $qmap$ to encode/decode qualities in the range 0-7 and can do
+Order-3 entropy encoding by setting $qbits=9$ and $qshift=3$.  This
+leaves 7 bits remaining, which would could distribute as 3 bits of
+position (perhaps pos/16 or pos/32 to get approximate location), 3
+bits of running delta/4, and a bit to distinguish READ1 from READ2.
+Disagramatically the combined context layout would look this this:
 
 \includegraphics[width=250pt, keepaspectratio=true]{img/fqz_bits.png}
 
-For simplicity of pseudocode, consider the variables set
-here to be accessable by all other FQZComp functions (i.e. global or
-class members).  In the tables and code below, prefix of `q' is for
-quality, `p' is for position, `d' is for delta and `s' is for strand.
-
-The above diagram would be defined using the following parameters:
-
-% Note we have a map for quality (qmap), but not for pos or delta.
-%
-% Potentially pos map could be useful if we wish to use a context of,
-% say, ``cycle 17 was duff but all others are fine''.  We map 100
-% cycles to a boolean (is cycle 17 or not) to reduce the context size
-% and speed up learning.
-%
-% We may also wish to have a dedicated qmap used purely for context
-% building, rather than also using it, as is now, for collapsing the
-% dispersed bins into neighbouring values of 0-N.  E.g. This may be
-% useful to distinguish quality of ``is max or not''?
-%
-% All of these are generalisations of using the division by shifting.
-% The map is a lookup table which can do that for us (but slower?).
+In parameter terms we would use these values in the parameter block:
 
 \begin{tabular}{lrl}
 \hline
@@ -367,54 +432,19 @@ The above diagram would be defined using the following parameters:
 \hline
 qbits  & 9  & 3 bit each $\implies$ Order-3 Markov model \\
 qshift & 3  & E.g. HiSeq X 8-binned, as 3 bit qmap \\
-qloc   & 0  \\
+qloc   & 0  & No $qtab$ needed, but $qmap$ converts qual to 0-7 range.\\
 \hline
-pbits  & 3  & $pos / 32$, caps as pos 256\\
-pshift & 5  \\
-ploc   & 9  \\
+ploc   & 9  & With $ptab$ performing pos/32 function.\\
 \hline
-dbits  & 3  & $delta / 4$, caps at 32\\
-dshift & 2  \\
-dloc   & 12 \\
+dloc   & 12 & With $dtab$ performing delta/4 function.\\
 \hline
 sloc   & 15 & 1 bit, iff $do\_strand$ flag is set\\
 \hline
 \end{tabular}
 
+FIXME: our worked example should include actual bytes for qmap, ptab
+and dtab too.
 
-The start of an FQZComp data stream consists of the parameters used by
-the decoder. The data layout is as follows.
-
-\begin{tabular}{lllp{12cm}}
-\hline
-\textbf{Bits} & \textbf{Type} & \textbf{Name} & \textbf{Description}\\
-\hline
-8 & uint8 & $version$ & FQZComp format version: must be 5\\
-8 & uint8 & $flags$ & Bit-flags. From lowest bit to highest:\\
-& & & 1: $do\_qmap$: indicates quality map is present\\
-& & & 2: $do\_deup$: model\_dup will be used\\
-& & & 4: $do\_len$: model\_len will be used for every record, rather than first only.\\
-& & & 8: $do\_strand$: $model\_strand$ and $sloc$ will be used\\
-& & & 16: $do\_rev$: $model\_revcomp$ will be used. Must be set for CRAM v3.1\\
-8 & uint8 & $max\_sym$ & Total number of distinct quality values\\
-\hline
-%(if $do\_qmap$ is set)
-$8*max\_sym$ & uint8 & $qmap$ & Map for ``unbinning'' quality values from contiguous to discrete values. (FIXME: iff $do\_qmap$ is set)\\
-\hline
-4 & uint4 (low)  & qshift & Left bit shift per successive quality in quality context\\
-4 & uint4 (high) & qbits  & Number of bits for quality context\\
-4 & uint4 (low)  & pshift & Divisor (right shift) for position\\
-4 & uint4 (high) & pbits  & Number of bits for position context\\
-4 & uint4 (low)  & dshift & Divisor (right shift) for delta\\
-4 & uint4 (high) & dbits  & Number of bits for delta context\\
-4 & uint4 (low)  & sloc   & Bit position of strand context\\
-4 & uint4 (high) & qloc   & Bit position of quality context\\
-4 & uint4 (low)  & dloc   & Bit position of delta context\\
-4 & uint4 (high) & ploc   & Bit position of position context\\
-\hline
-$8*2^{dbits}$ & uint8 & dtab & Delta lookup table\\
-\hline
-\end{tabular}
 
 \textsc{DecodeFQZParams} below describes the pseudocode for reading
 the parameter block.
@@ -425,17 +455,20 @@ the parameter block.
   \If{$vers \ne 5$}
     \State ERROR
   \EndIf
-  \settowidth{\maxwidth}{do\_strand\ }
+  \settowidth{\maxwidth}{have\_qtab\ }
   \State \algalign{flags}{\gets} \Call{ReadByte}{}
+  \State \algalign{have\_qtab}{\gets}    $flags\bitand 128$
+  \State \algalign{have\_dtab}{\gets}    $flags\bitand 64$
+  \State \algalign{have\_ptab}{\gets}    $flags\bitand 16$
   \State \algalign{do\_rev}{\gets}    $flags\bitand 16$
   \State \algalign{do\_strand}{\gets} $flags\bitand 8$
   \State \algalign{do\_len}{\gets}    $flags\bitand 4$
   \State \algalign{do\_dedup}{\gets}  $flags\bitand 2$
-  \State \algalign{do\_qmap}{\gets}   $flags\bitand 1$
+  \State \algalign{have\_qmap}{\gets}   $flags\bitand 1$
   \State \algalign{max\_sym}{\gets} \Call{ReadByte}{}
-  \If{$do\_qmap$}
+  \If{$have\_qmap$}
     \State $max\_sym \gets$ \Call{ReadByte}{}
-    \For{$i \gets 0$ to $nsym-1$}
+    \For{$i \gets 0$ to $max\_sym-1$}
       \State $qmap_i \gets$ \Call{ReadByte}{}
     \EndFor
   \EndIf
@@ -443,21 +476,25 @@ the parameter block.
   \State \algalign{x}{\gets} \Call{ReadByte}{}
   \State \algalign{qshift}{\gets} $x \bmod 16$
   \State \algalign{qbits}{\gets} $x \bdiv 16$
-  \State \algalign{qmax}{\gets} $2^{qbits}-1$
-  \State \algalign{x}{\gets} \Call{ReadByte}{}
-  \State \algalign{pshift}{\gets} $x \bmod 16$
-  \State \algalign{pbits}{\gets} $x \bdiv 16$
-  \State \algalign{x}{\gets} \Call{ReadByte}{}
-  \State \algalign{dshift}{\gets} $x \bmod 16$
-  \State \algalign{dbits}{\gets} $x \bdiv 16$
-  \State \algalign{dmax}{\gets} $2^{dbits}-1$
   \State \algalign{x}{\gets} \Call{ReadByte}{}
   \State \algalign{sloc}{\gets} $x \bmod 16$
   \State \algalign{qloc}{\gets} $x \bdiv 16$
   \State \algalign{x}{\gets} \Call{ReadByte}{}
   \State \algalign{dloc}{\gets} $x \bmod 16$
   \State \algalign{ploc}{\gets} $x \bdiv 16$
-  \State \algalign{dtab}{\gets} \Call{ReadArray}{$2^{dbits}$}
+  \If{$have\_qtab$}
+    \State $qtab \gets$ \Call{ReadArray}{$256$}
+  \Else
+    \For{$i \gets 0$ to $256$}
+      \State $qtab_i \gets i$
+    \EndFor
+  \EndIf
+  \If{$have\_ptab$}
+    \State $ptab \gets$ \Call{ReadArray}{$1024$}
+  \EndIf
+  \If{$have\_dtab$}
+    \State $qtab \gets$ \Call{ReadArray}{$256$}
+  \EndIf
 \EndProcedure
 \end{algorithmic}
 
@@ -573,17 +610,16 @@ elsewhere).
   \State $qual \gets qmap_q$
   \State $output_i \gets qual$
   \Statex
-  \State $qctx \gets (qctx << qshift) + q$\Comment{Update context}
-  \State $ctx \gets (qctx\bitand qmax) << qloc$
-  \If{$pbits > 0$}
-    \State $ctx \gets ctx + ($\Call{Min}{$pmax, pos>>pshift$}$ << ploc)$
+  \State $qctx \gets (qctx << qshift) + qtab_q$\Comment{Update context}
+  \State $ctx \gets (qctx\bitand (2^{qbits}-1)) << qloc$
+  \If{$have\_ptab$}
+    \State $ctx \gets ctx + ($\Call{Min}{$1024,\ ptab_{pos}$}$ << ploc)$
   \EndIf
   \If{$do\_strand$}
     \State $ctx \gets ctx + (is\_read2 << sloc)$
   \EndIf
-  \If{$dbits > 0$}
-    \State $dmin \gets$ \Call{Min}{$255, delta>>pshift$}
-    \State $ctx \gets ctx + (dtab_{dmin} << dloc)$
+  \If{$have\_dtab$}
+    \State $ctx \gets ctx + ($\Call{Min}{$255,\ dtab_{delta}$}$ << dloc)$
   \EndIf
   \State $ctx \gets ctx\bitand (2^{16}-1)$
   \Statex
