@@ -13,7 +13,6 @@
 
 \usepackage{graphicx}
 \usepackage{array}
-\usepackage{ulem}
 \usepackage{fixltx2e}
 \usepackage{amssymb}
 \usepackage{fancyhdr}
@@ -362,11 +361,11 @@ this scenario, but an encoder could define $qtab$ to convert \{0, 1, 2, 3\}
 to \{0, 0, 0, 1\} and use $qshift$ of 1 instead, giving us
 knowledge of which of the previous 6 values were maximum quality.}
 
-The position context is simply the offset along the current record
-(starting at zero).  (FIXME: current code decrements position from
-last base to first.  Fix this!)  As with the quality context it may be
-passed through a lookup table $ptab$ before shifting left by $ploc$
-bits and adding to the combined context.
+The position context is simply the number of remaining quality values
+in this record, so is a value starting at record length and
+decrementing).  As with the quality context it may be passed through a
+lookup table $ptab$ before shifting left by $ploc$ bits and adding to
+the combined context.
 
 Delta is a count of the number of times the quality value has changed
 from one value to a different one.  Thus a run of identical values
@@ -393,15 +392,15 @@ the decoder. The data layout is as follows.
 & & & 128: $have\_qtab$: Load $qtab$, otherwise set $qtab_i = i$\\
 8 & uint8 & $max\_sym$ & Total number of distinct quality values\\
 \hline
+4 & uint4 (high) & qbits  & Total number of bits for quality context\\
+4 & uint4 (low)  & qshift & Left bit shift per successive quality in quality context\\
+4 & uint4 (high) & qloc   & Bit position of quality context\\
+4 & uint4 (low)  & sloc   & Bit position of strand context\\
+4 & uint4 (high) & ploc   & Bit position of position context\\
+4 & uint4 (low)  & dloc   & Bit position of delta context\\
+\hline
 \multicolumn{4}{l}{\textit{If have\_qmap flag is set:}}\\
 $8*max\_sym$ & uint8 & $qmap$ & Map for ``unbinning'' quality values.\\
-\hline
-4 & uint4 (low)  & qshift & Left bit shift per successive quality in quality context\\
-4 & uint4 (high) & qbits  & Total number of bits for quality context\\
-4 & uint4 (low)  & sloc   & Bit position of strand context\\
-4 & uint4 (high) & qloc   & Bit position of quality context\\
-4 & uint4 (low)  & dloc   & Bit position of delta context\\
-4 & uint4 (high) & ploc   & Bit position of position context\\
 \hline
 \multicolumn{4}{l}{\textit{If have\_qtab flag is set:}}\\
 variable & uint8 & $qtab$ & Quality context lookup table\\
@@ -498,47 +497,90 @@ the parameter block.
 \EndProcedure
 \end{algorithmic}
 
-\textsc{ReadArray} reads $n$ run-lengths to fill out an array $A$.
-All remaining array elements, up to the element 256, are copies of the
-last specified element. For example \textsc{ReadArray}(4) with input
-bytes \{1,2,0,3\} would return an array $A = \{0,1,1,3,3,3,3, (3 ...)\}$.
-
-\begin{algorithmic}[1]
-\Function{ReadArray}{n}
-\State $i \gets 0$
-\For{$v \gets 0$ to $n-1$}
-  \State $rlen \gets $\Call{ReadByte}{}
-  \For{$j \gets 0$ to $rlen-1$}
-    \State $A_i \gets v$
-    \State $i \gets i+1$
-  \EndFor
-\EndFor
-\State $v \gets A_{i-1}$
-\While{$i < 256$}
-  \State $A_i \gets v$
-  \State $i \gets i+1$
-\EndWhile
-\State \Return $A$
-\EndFunction
-\end{algorithmic}
-
-\textsc{FQZCreateModels} creates the decoder models based on the above parameters.
+\textsc{FQZCreateModels} creates the decoder models based on the above
+parameters and the shared range coder.
 
 \begin{algorithmic}[1]
 \Procedure{FQZCreateModels}{}
   \State $rc \gets $\Call{RangeCreate}{}
-  \State $model\_strand \gets $\Call{ModelCreate}{$2$}
-  \State $model\_dup \gets $\Call{ModelCreate}{$2$}
   \For{$i \gets 0$ to $3$}
     \State $model\_len_i \gets $\Call{ModelCreate}{$256$}
   \EndFor
   \For{$i \gets 0$ to $2^{16}-1$}
     \State $model\_qual_i \gets $\Call{ModelCreate}{$max\_sym$}
   \EndFor
+  \If{$do\_strand$}
+    \State $model\_dup \gets $\Call{ModelCreate}{$2$}
+  \EndIf
   \If{$do\_rev$}
     \State $model\_rev \gets $\Call{ModelCreate}{$2$}
   \EndIf
+  \If{$do\_strand$}
+    \State $model\_strand \gets $\Call{ModelCreate}{$2$}
+  \EndIf
 \EndProcedure
+\end{algorithmic}
+
+\textsc{ReadArray} reads an array $A$ of size $n$ which maps values 0
+to $n-1$ to a smaller range (0 to $m-1$), both monotonically
+increasing.  For efficiency this is done using a two-level run length
+encoding.
+
+Assuming $m < n$ there will be runs of the same value.  We measure run
+lengths for all values (even if they are zero).  For example an array
+$A = \{0,1,3,4,5,6,7,7,7,7\}$ may be converted to run lengths $R =
+\{1,1,0,1,1,1,1,4\}$.  This array $R$ is no longer monotonically
+increasing but still has repeated values, so is run-length encoded by
+storing the number of additional values whenever the last two lengths
+match.  This converts $R$ to $R2 = \{1, 1, +0, 0, 1, 1, +2, 4\}$ where
+the `+' symbol is shown purely to indicate the values representing the
+additional run-length copy numbers.
+
+Finally, for coping with runs of 255 or more any run value of 255 is
+assumed to be part of a larger run and the next value is read and
+added to run-length until it is no longer 255.  For example run length
+600 would be represented as 255 255 90.
+
+The final array $R2$ is the stored data stream.  The decoder process
+is the reverse of the above, starting by creating $R$ and then $A$,
+for example using the following pseudocode.
+
+\begin{algorithmic}[1]
+\Function{ReadArray}{n}
+\State $i,j,z \gets 0$
+\State $last \gets -1$
+\While{$z < n$} \Comment{Convert $R2$ to $R$}
+  \State $run \gets $ \Call{ReadByte}{}
+  \State $R_j \gets run$
+  \State $j \gets j+1$
+  \State $z \gets z + run$
+  \If{$run = last$}
+    \State $copy \gets $ \Call{ReadByte}{}
+    \For{$x \gets 1 $ to $copy$}
+      \State $R_j \gets run$
+      \State $j \gets j+1$
+    \EndFor
+    \State $z \gets z + run \times copy$
+  \EndIf
+\EndWhile
+\Statex
+\State $i,j,z \gets 0$
+\While{$z < n$} \Comment{Convert $R$ to $A$}
+  \State $run\_len \gets 0$
+  \Repeat
+    \State $part \gets R_j$
+    \State $j \gets j + 1$
+    \State $run\_len \gets run\_len + part$
+  \Until{$part \ne 255$}
+  \For{$x \gets 1 $ to $run\_len$}
+    \State $A_z \gets i$
+    \State $z \gets z+1$
+  \EndFor
+  \State $i \gets i+1$
+\EndWhile
+\Statex
+\State \Return $A$
+\EndFunction
 \end{algorithmic}
 
 The main loop decodes data in the following order per read:  read
@@ -599,10 +641,7 @@ elsewhere).
       \EndIf
     \EndIf
     \Statex
-    \State $ctx \gets 0$
-    \State $qctx \gets 0$
-    \State $qlast \gets 0$
-    \State $delta \gets 0$
+    \State $ctx, qctx, qlast, delta \gets 0$
   \EndIf
   \Statex
   \State $q \gets model\_qual_{ctx}.$\Call{ModelDecode}{$rc$}
@@ -628,7 +667,7 @@ elsewhere).
   \EndIf
   \State $qlast \gets qual$
   \State $i \gets i + 1$
-  \State $j \gets j - 1$
+  \State $pos \gets pos - 1$
 \EndWhile
 \If{$do\_rev$}
   \State \Call{ReverseQualities}{$output\ ,rev,\ len$}
