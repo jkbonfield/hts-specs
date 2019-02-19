@@ -21,12 +21,23 @@ function RansGetCumulativeFreq(R) {
 function RansGetSymbolFromFreq(C, f) {
     // NOTE: Inefficient.
     // In practice we would implement this via a precomputed
-    // lookup table C2S[f].
+    // lookup table C2S[f]; see RansBuildC2S below.
     var s = 0;
     while (f >= C[s+1])
 	s++;
 
     return s;
+}
+
+function RansBuildC2S(C) {
+    var C2S = new Array(0x1000);
+    var s = 0;
+    for (var f = 0; f < 0x1000; f++) {
+	while (f >= C[s+1])
+	    s++;
+	C2S[f] = s;
+    }
+    return C2S;
 }
 
 function RansAdvanceStep(R, c, f) {
@@ -97,6 +108,9 @@ function RansDecode0(src, nbytes) {
     var C = new Array(256);
     ReadFrequencies0(src, F, C);
 
+    // Fast lookup to avoid slow RansGetSymbolFromFreq
+    var C2S = RansBuildC2S(C);
+
     // Initialise rANS state
     var R = new Array(4);
     for (var i = 0; i < 4; i++)
@@ -110,7 +124,10 @@ function RansDecode0(src, nbytes) {
 		return output;
 
 	    var f = RansGetCumulativeFreq(R[j]);
-	    var s = RansGetSymbolFromFreq(C, f);
+
+	    //var s = RansGetSymbolFromFreq(C, f);
+	    var s = C2S[f]; // Precomputed version of above
+
 	    output[i+j] = s;
 	    R[j] = RansAdvanceStep(R[j], C[s], F[s]);
 	    R[j] = RansRenorm(src, R[j]);
@@ -162,6 +179,11 @@ function RansDecode1(src, nbytes) {
     var C = new Array(256);
     ReadFrequencies1(src, F, C);
 
+    // Fast lookup to avoid slow RansGetSymbolFromFreq
+    var C2S = new Array(256);
+    for (var i = 0; i < 256; i++)
+	C2S[i] = RansBuildC2S(C[i]);
+
     // Initialise rANS state
     var R = new Array(4);
     var L = new Array(4);
@@ -176,7 +198,10 @@ function RansDecode1(src, nbytes) {
     for (var i = 0; i < nbytes4; i++) {
 	for (var j = 0; j < 4; j++) {
 	    var f = RansGetCumulativeFreq(R[j]);
-	    var s = RansGetSymbolFromFreq(C[L[j]], f);
+
+	    //var s = RansGetSymbolFromFreq(C[L[j]], f);
+	    var s = C2S[L[j]][f]; // Precomputed version of above
+
 	    output[i+j*nbytes4] = s;
 	    R[j] = RansAdvanceStep(R[j], C[L[j]][s], F[L[j]][s]);
 	    R[j] = RansRenorm(src, R[j]);

@@ -1,3 +1,9 @@
+// Command line tool to manually test the rans.js code.
+//
+// ./node --use-strict main_rans.js in.o1 out
+//
+// Runs approx 2.3x slower than C for Order0 and 5x slower for Order1
+
 var fs = require("fs");
 
 if (process.argv.length < 4) {
