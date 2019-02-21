@@ -1,3 +1,5 @@
+var Int64 = require('node-cint64').Int64;
+
 // Turn a buffer into a fake stream with get / put commands.
 // This enables up to closely match the published pseudocode.
 module.exports = class IOStream {
@@ -16,6 +18,12 @@ module.exports = class IOStream {
     ReadUint32() {
 	const i = this.buf.readInt32LE(this.pos)
 	this.pos += 4
+	return i
+    }
+
+    ReadUint64() {
+	const i = new Int64(this.buf.slice(this.pos, this.pos+7));
+	this.pos += 8
 	return i
     }
 
