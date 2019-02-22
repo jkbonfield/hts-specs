@@ -9,6 +9,11 @@ checking the pseudocode in the CRAM specification.  It is written as
 close to this pseudocode as is possible.
 
 
+Prerequisites: minimist package for command line parsing.
+
+  npm install minimist
+
+
 iostream.js
 -----------
 
@@ -27,3 +32,17 @@ main_rans.js
 
 A command line tool to exercise the rans.js code, included for debug
 purposes.
+
+
+arith_sh.js
+-----------
+
+Arithmetic (range) coding with Schindler carry handling.
+
+
+main_arith.js
+-------------
+
+A command line tool to exercise the arith_js.js code, included for debug
+purposes.
+

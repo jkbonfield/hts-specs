@@ -5,25 +5,27 @@
 // Runs approx 2.3x slower than C for Order0 and 5x slower for Order1
 
 var fs = require("fs");
+var rans = require("./rans");
+var argv = require('minimist')(process.argv.slice(2), { boolean: "d" });
 
-if (process.argv.length < 4) {
-    process.stderr.write("Usage: node main_rans.js [option] input-file output-file\n");
+if (argv._.length != 2) {
+    process.stderr.write("Usage: node main_rans.js [-d] [-o order] input-file output-file\n");
     process.exit(1);
 }
 
-var filein  = process.argv[2];
-var fileout = process.argv[3];
+var filein  = argv._[0]
+var fileout = argv._[1]
 
 var buf = fs.readFileSync(filein);
-process.stderr.write("Input file is " + buf.length + " bytes long\n");
 
-var rans = require("./rans");
-var buf2 = rans.decode(buf);
+if (!argv.d) {
+    var order = argv.o != undefined ? argv.o : 0;
+    var buf2 = rans.encode(buf, order);
+    process.stderr.write("Compress order "+order+", "+buf.length+" => " + buf2.length + "\n");
+    fs.writeFileSync(fileout, buf2);
 
-process.stderr.write("Output file is " + buf2.length + " bytes long\n");
-
-fs.writeFileSync(fileout, buf2);
-
-
-
-
+} else {
+    var buf2 = rans.decode(buf);
+    process.stderr.write("Decompress " + buf.length + " => " + buf2.length + "\n");
+    fs.writeFileSync(fileout, buf2);
+}

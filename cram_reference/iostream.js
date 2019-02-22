@@ -3,15 +3,23 @@ var Int64 = require('node-cint64').Int64;
 // Turn a buffer into a fake stream with get / put commands.
 // This enables up to closely match the published pseudocode.
 module.exports = class IOStream {
-    constructor(buf, start_pos = 0) {
-	this.buf = buf;
-	this.pos = start_pos;
-	this.length = buf.length
+    constructor(buf, start_pos = 0, size = 0) {
+	if (size != 0) {
+	    this.buf = Buffer.allocUnsafe(size)
+	    this.length = size
+	} else {
+	    this.buf = buf
+	    this.length = buf.length
+	}
+	this.pos = start_pos
     }
+
+    // ----------
+    // Reading
 
     ReadByte() {
 	const b = this.buf[this.pos]
-	this.pos++;
+	this.pos++
 	return b
     }
 
@@ -68,5 +76,56 @@ module.exports = class IOStream {
 	}
 
 	return i;
+    }
+
+    // ----------
+    // Writing
+    WriteByte(b) {
+	this.buf[this.pos++] = b
+    }
+
+    WriteUint32(u) {
+	this.buf.writeInt32LE(u, this.pos);
+	this.pos += 4;
+    }
+
+    WriteITF8(i) {
+	// Horrid, ITF8 is unsigned, but we still write signed into it
+	if (i < 0)
+	    i = (1<<32) + i
+
+	if (i <= 0x0000007f) {
+	    // 1 byte
+	    this.buf[this.pos++] = i
+	} else if (i <= 0x00003fff) {
+	    // 2 bytes
+	    this.buf[this.pos++] = 0x80 | Math.floor(i / 256)
+	    this.buf[this.pos++] = i & 0xff;
+	} else if (i < 0x0001ffff) {
+	    // 3 bytes
+	    this.buf[this.pos++] = 0xc0 | Math.floor(i / 65536)
+	    this.buf[this.pos++] = Math.floor(i / 256) & 0xff
+	    this.buf[this.pos++] = i & 0xff;
+	} else if (i < 0x0fffffff) {
+	    // 4 bytes
+	    this.buf[this.pos++] = 0xe0 | Math.floor(i / 16777216)
+	    this.buf[this.pos++] = Math.floor(i / 65536) & 0xff
+	    this.buf[this.pos++] = Math.floor(i /   256) & 0xff
+	    this.buf[this.pos++] = i & 0xff;
+	} else {
+	    // 5 bytes; oddly using 4.5 bytes
+	    this.buf[this.pos++] = 0xf0 | Math.floor(i / 268435456)
+	    this.buf[this.pos++] = Math.floor(i / 1048576) & 0xff
+	    this.buf[this.pos++] = Math.floor(i /    4096) & 0xff
+	    this.buf[this.pos++] = Math.floor(i /       4) & 0xff
+	    this.buf[this.pos++] = i & 0x0f;
+	}
+    }
+
+    // ----------
+    // Writing from end of buffer going backwards.
+    // Needed by rANS codec.
+    WriteByteNeg(b) {
+	this.buf[--this.pos] = b;
     }
 };
