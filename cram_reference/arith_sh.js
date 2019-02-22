@@ -22,11 +22,11 @@ class RangeCoder {
     }
 
     RangeStartDecode(src) {
-	// May overflow.  We read in 8 bytes but only max can use last 4.
-	// Discard first 4?  Why are they even written?
 	for (var i = 0; i < 5; i++)
 	    this.code = (this.code << 8) + src.ReadByte();
-	this.code = Math.min(this.code, 0xffffffff);
+	this.code &= 0xffffffff;
+	if (this.code < 0)
+	    this.code += 4294967296 // need it to be unsigned
     }
 
     RangeGetFrequency(tot_freq) {
@@ -44,7 +44,6 @@ class RangeCoder {
 
 	this.code  -= sym_low * this.range;
 	this.range *= sym_freq;
-	//this.range = Math.min(this.range, 0xffffffff);
 
 	while (this.range < (1<<24)) {
 	    this.range *= 256;
@@ -70,7 +69,7 @@ class RangeCoder {
 	}
 	this.low <<= 8;
 	if (this.low < 0)
-	    this.low += 4294967296
+	    this.low += 4294967296 // need it to be unsigned
     }
 
     RangeEncode(dst, sym_low, sym_freq, tot_freq) {
@@ -79,7 +78,7 @@ class RangeCoder {
 	this.low   += sym_low * this.range;
 	this.low    = this.low & 0xffffffff;
 	if (this.low < 0)
-	    this.low += 4294967296
+	    this.low += 4294967296 // need it to be unsigned
 	this.range *= sym_freq;
 
 	this.carry += (this.low < tmp) ? 1 : 0; // count overflows

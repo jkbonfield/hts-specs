@@ -46,3 +46,8 @@ main_arith.js
 A command line tool to exercise the arith_js.js code, included for debug
 purposes.
 
+
+byte_model.js
+-------------
+
+An adaptive model for keeping track of symbol frequencies.
