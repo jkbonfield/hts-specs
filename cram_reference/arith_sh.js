@@ -25,8 +25,7 @@ class RangeCoder {
 	for (var i = 0; i < 5; i++)
 	    this.code = (this.code << 8) + src.ReadByte();
 	this.code &= 0xffffffff;
-	if (this.code < 0)
-	    this.code += 4294967296 // need it to be unsigned
+	this.code >>>= 0; // force to be +ve int
     }
 
     RangeGetFrequency(tot_freq) {
@@ -62,23 +61,20 @@ class RangeCoder {
 		this.FFnum--;
 	    }
 	    // Take a copy of top byte ready for next flush
-	    this.cache = this.low >> 24;
+	    this.cache = this.low >>> 24;
 	    this.carry = 0;
 	} else {
 	    this.FFnum++; // keep track of number of overflows to write
 	}
 	this.low <<= 8;
-	if (this.low < 0)
-	    this.low += 4294967296 // need it to be unsigned
+	this.low >>>= 0; // force to be +ve int
     }
 
     RangeEncode(dst, sym_low, sym_freq, tot_freq) {
 	var tmp = this.low
 	this.range  = Math.floor(this.range / tot_freq)
 	this.low   += sym_low * this.range;
-	this.low    = this.low & 0xffffffff;
-	if (this.low < 0)
-	    this.low += 4294967296 // need it to be unsigned
+	this.low >>>= 0; // force to be +ve int
 	this.range *= sym_freq;
 
 	this.carry += (this.low < tmp) ? 1 : 0; // count overflows
