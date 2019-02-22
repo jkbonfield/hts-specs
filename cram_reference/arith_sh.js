@@ -19,27 +19,8 @@ class RangeCoder {
 	this.FFnum = 0;
 	this.carry = 0;
 	this.cache = 0;
-	
-	// FIXME: move in spec to RangeStartDecode below
-	for (var i = 0; i < 5; i++)
-	    this.code = (this.code << 8) + src.ReadByte();
-	this.code = Math.min(this.code, 0xffffffff);
     }
 
-// Encoder side
-//    RangeShiftLow(src) {
-//	if (rc->low < 0xff000000 | rc->carry) {
-//	    rc->out_buf++ = rc->cache + rc->carry;
-//	    while (rc->FFnum) {
-//		rc->out_buf++ = rc->carry-1;
-//		rc->FFnum--;
-//	    }
-//	} else {
-//	    rc->FFnum++;
-//	}
-//	rc->low <<= 8;
-//    }
-    
     RangeStartDecode(src) {
 	// May overflow.  We read in 8 bytes but only max can use last 4.
 	// Discard first 4?  Why are they even written?
@@ -68,22 +49,69 @@ class RangeCoder {
 	while (this.range < (1<<24)) {
 	    this.range *= 256;
 	    this.code = (this.code*256 + src.ReadByte());
-	    //this.code = Math.min(this.code, 0xffffffff);
 	}
+    }
+
+    RangeShiftLow(dst) {
+	if (this.low < 0xff000000 | this.carry) {
+	    dst.WriteByte(this.cache + this.carry);
+
+	    // Flush any stored FFs
+	    while (this.FFnum) {
+		//console.log("emit carry");
+		dst.WriteByte(this.carry-1);
+		this.FFnum--;
+	    }
+	    // Take a copy of top byte ready for next flush
+	    this.cache = this.low >> 24;
+	    this.carry = 0;
+	} else {
+	    this.FFnum++; // keep track of number of overflows to write
+	}
+	this.low <<= 8;
+	if (this.low < 0)
+	    this.low += 4294967296
+    }
+
+    RangeEncode(dst, sym_low, sym_freq, tot_freq) {
+	var tmp = this.low
+	this.range  = Math.floor(this.range / tot_freq)
+	this.low   += sym_low * this.range;
+	this.low    = this.low & 0xffffffff;
+	if (this.low < 0)
+	    this.low += 4294967296
+	this.range *= sym_freq;
+
+	this.carry += (this.low < tmp) ? 1 : 0; // count overflows
+	while (this.range < (1<<24)) {
+	    this.range *= 256;
+	    this.RangeShiftLow(dst);
+	}
+    }
+
+    RangeFinishEncode(dst) {
+	for (var i = 0; i < 5; i++)
+	    this.RangeShiftLow(dst)
     }
 };
 
 //----------------------------------------------------------------------
 // Main arithmetic entry function: decodes a compressed src and
 // returns the uncompressed buffer.
-function decode(src) {
-    return decode0(src);
+function decode(src, order) {
+    return order ? decode1(src) : decode0(src);
 }
+
+function encode(src, order) {
+    return order ? encode1(src) : encode0(src);
+}
+
+//----------------------------------------------------------------------
+// Order-0 codec
 
 function decode0(src) {
     var stream = new IOStream(src);
 
-    // Punt this bit to main_arith.js
     var n_out = stream.ReadUint32();
     stream.ReadUint32();
     var output = new Buffer(n_out);
@@ -91,24 +119,39 @@ function decode0(src) {
     var byte_model = new ByteModel(256);
 
     var rc = new RangeCoder(stream);
-//    RC_StartDecode(&rc);
+    rc.RangeStartDecode(stream);
 
     for (var i = 0; i < n_out; i++)
 	output[i] = byte_model.ModelDecode(stream, rc);
 
-//    RC_FinishDecode(&rc);
-
     return output;
 }
+
+function encode0(src) {
+    const n_in = src.length
+    var out = new IOStream("", 0, n_in*1.1 + 100); // guestimate worst case!
+
+    out.WriteUint32(n_in);
+    out.WriteUint32(0);
+
+    var byte_model = new ByteModel(256);
+    var rc = new RangeCoder(out);
+
+    for (var i = 0; i < n_in; i++)
+	byte_model.ModelEncode(out, rc, src[i])
+    rc.RangeFinishEncode(out)
+
+    return out.buf.slice(0, out.pos);
+}
+
+//----------------------------------------------------------------------
+// Order-1 codec
 
 function decode1(src) {
     var stream = new IOStream(src);
 
-    // Punt this bit to main_arith.js
-    //var n_out = stream.ReadUint64();
     var n_out = stream.ReadUint32();
     stream.ReadUint32();
-    //var output = new Buffer(n_out.toNumber());
     var output = new Buffer(n_out);
 
     var byte_model = new Array(256);
@@ -116,7 +159,7 @@ function decode1(src) {
 	byte_model[i] = new ByteModel(256);
 
     var rc = new RangeCoder(stream);
-//    RC_StartDecode(&rc);
+    rc.RangeStartDecode(stream);
 
     var last = 0;
     for (var i = 0; i < n_out; i++) {
@@ -124,9 +167,29 @@ function decode1(src) {
 	last = output[i];
     }
 
-//    RC_FinishDecode(&rc);
-
     return output;
 }
 
-module.exports = { RangeCoder, decode }
+function encode1(src) {
+    const n_in = src.length
+    var out = new IOStream("", 0, n_in*1.1 + 100); // guestimate worst case!
+
+    out.WriteUint32(n_in);
+    out.WriteUint32(0);
+
+    var byte_model = new Array(256);
+    for (var i = 0; i < 256; i++)
+	byte_model[i] = new ByteModel(256);
+    var rc = new RangeCoder(out);
+
+    var last = 0;
+    for (var i = 0; i < n_in; i++) {
+	byte_model[last].ModelEncode(out, rc, src[i])
+	last = src[i]
+    }
+    rc.RangeFinishEncode(out)
+
+    return out.buf.slice(0, out.pos);
+}
+
+module.exports = { RangeCoder, decode, encode }
