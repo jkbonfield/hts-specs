@@ -1,4 +1,4 @@
-var Int64 = require('node-cint64').Int64;
+//var Int64 = require('node-cint64').Int64;
 
 // Turn a buffer into a fake stream with get / put commands.
 // This enables up to closely match the published pseudocode.
@@ -29,11 +29,11 @@ module.exports = class IOStream {
 	return i
     }
 
-    ReadUint64() {
-	const i = new Int64(this.buf.slice(this.pos, this.pos+7));
-	this.pos += 8
-	return i
-    }
+//    ReadUint64() {
+//	const i = new Int64(this.buf.slice(this.pos, this.pos+7));
+//	this.pos += 8
+//	return i
+//    }
 
     ReadITF8() {
 	var i = this.buf[this.pos];
@@ -82,6 +82,11 @@ module.exports = class IOStream {
     // Writing
     WriteByte(b) {
 	this.buf[this.pos++] = b
+    }
+
+    WriteData(buf, len) {
+	for (var i = 0; i < len; i++)
+	    this.buf[this.pos++] = buf[i]
     }
 
     WriteUint32(u) {
