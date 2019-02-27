@@ -66,7 +66,7 @@ const FLAG_PTAB   = 32
 const FLAG_DTAB   = 64
 const FLAG_QTAB   = 128
 
-function decode_fqz(src, q_len, n_in, n_out) {
+function decode_fqz(src, q_lens, n_out) {
     var qtab = new Array(256);
     var ptab = new Array(1024);
     var dtab = new Array(256);
@@ -207,6 +207,7 @@ function decode_fqz(src, q_len, n_in, n_out) {
 	    } else {
 		len = fixed_len
 	    }
+	    q_lens.push(len)
 
 	    // FIXME: do_rev
 
@@ -253,22 +254,22 @@ function decode_fqz(src, q_len, n_in, n_out) {
     return output;
 }
 
-function decode(src) {
+function decode(src, q_lens) {
     var stream = new IOStream(src);
 
-    var q_len = stream.ReadUint32()
+    //var q_len = stream.ReadUint32() // FIXME: remove
     
     var n_out = stream.ReadUint32();
     stream.ReadUint32();
 
-    var n_in = stream.ReadUint32();
-    stream.ReadUint32();
+    //var n_in = stream.ReadUint32(); // FIXME: remove
+    //stream.ReadUint32();
 
-    console.log("q_len",q_len)
-    console.log("n_in", n_in)
+    //console.log("q_len",q_len)
+    //console.log("n_in", n_in)
     console.log("n_out",n_out)
 
-    return decode_fqz(stream, q_len, n_in, n_out);
+    return decode_fqz(stream, q_lens, n_out);
 }
     
 //----------------------------------------------------------------------
@@ -311,10 +312,10 @@ function pick_fqz_params(src, q_lens, qhist) {
 
 	max_sym:   max_sym,
 	nsym:      nsym,
-	
+
 	do_qmap:   0,
 	do_dedup:  0,
-	fixed_len: 1,
+	fixed_len: (q_lens.length == 1) ? 1 : 0,
 	do_strand: 0,
 	do_rev:    0,
 	do_pos:    1,
@@ -339,32 +340,32 @@ function pick_fqz_params(src, q_lens, qhist) {
     console.log(params)
     return params
 
-    // Example of customized options for 9827 data set (q40b)
-    return {qbits:    9,
-	    qshift:   5,
-	    qloc:     7,
-
-	    pbits:    7,
-	    pshift:   0,
-	    ploc:     0,
-
-	    dbits:    2,
-	    dshift:   0,
-	    dloc:    14,
-
-	    sloc:    15,
-
-	    max_sym: 44,
-	    nsym:    44,
-	    
-	    do_qmap:  0,
-	    do_dedup: 0,
-	    fixed_len: 1,
-	    do_strand: 0,
-	    do_rev:   0,
-	    do_pos:   1,
-	    do_delta: 1,
-	    do_qtab:  0}
+//    // Example of customized options for 9827 data set (q40b)
+//    return {qbits:    9,
+//	    qshift:   5,
+//	    qloc:     7,
+//
+//	    pbits:    7,
+//	    pshift:   0,
+//	    ploc:     0,
+//
+//	    dbits:    2,
+//	    dshift:   0,
+//	    dloc:    14,
+//
+//	    sloc:    15,
+//
+//	    max_sym: max_sym,
+//	    nsym:    nsym,
+//
+//	    do_qmap:  0,
+//	    do_dedup: 0,
+//	    fixed_len: 1,
+//	    do_strand: 0,
+//	    do_rev:   0,
+//	    do_pos:   1,
+//	    do_delta: 1,
+//	    do_qtab:  0}
 }
 
 function store_array(out, tab, size) {
@@ -524,20 +525,26 @@ function encode_fqz(out, src, q_lens, params, qhist, qtab, ptab, dtab, stab) {
     // The main encoding loop
     var p = 0; // remaining position along current record
     var i = 0; // index in src data
+    var rec = 0;
     while (i < n_in) {
 	if (p == 0) {
 	    // Reset contexts at the statr of each new record
 	    if (params.fixed_len) {
 		var len = q_lens[0]
 		if (i == 0) { // First length
-		    console.log("Encode len", len)
+		    console.log("Encode fixed len", len)
 		    model_len[0].ModelEncode(out, rc, len       & 0xff)
 		    model_len[1].ModelEncode(out, rc, (len>>8)  & 0xff)
 		    model_len[2].ModelEncode(out, rc, (len>>16) & 0xff)
 		    model_len[3].ModelEncode(out, rc, (len>>24) & 0xff)
 		}
 	    } else {
-		process.exit(1);//FIXME
+		var len = q_lens[rec++] // fetch next length
+		//console.log("Encode var len", len)
+		model_len[0].ModelEncode(out, rc, len       & 0xff)
+		model_len[1].ModelEncode(out, rc, (len>>8)  & 0xff)
+		model_len[2].ModelEncode(out, rc, (len>>16) & 0xff)
+		model_len[3].ModelEncode(out, rc, (len>>24) & 0xff)
 	    }
 
 	    var is_read2 = 0; // FIXME
@@ -584,20 +591,17 @@ function encode_fqz(out, src, q_lens, params, qhist, qtab, ptab, dtab, stab) {
     return out.buf.slice(0, out.pos)
 }
 
-function encode(src) {
+function encode(src, q_lens) {
     var qhist = new Array(256)
     var qtab  = new Array(256)
     var ptab  = new Array(1024) 
     var dtab  = new Array(256)
     var stab  = new Array(2)
 
-    //var q_lens = [100] // FIXME
-    var q_lens = [151] // FIXME
-
     var out = new IOStream("", 0, src.length*1.1 + 100); // FIXME: guestimate worst case
-    out.WriteUint32(q_lens[0]); // FIXME
+    //out.WriteUint32(q_lens[0]); // FIXME
     out.WriteUint32(src.length); out.WriteUint32(0); // uncompressed size
-    out.WriteUint32(0); out.WriteUint32(0); // compressed size, unused...
+    //out.WriteUint32(0); out.WriteUint32(0); // compressed size, unused...
     
     var params = pick_fqz_params(src, q_lens, qhist)
     var out = encode_fqz_meta_data(out, params, qhist, qtab, ptab, dtab, stab)
