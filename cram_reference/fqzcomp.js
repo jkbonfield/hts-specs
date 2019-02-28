@@ -257,13 +257,11 @@ function decode_fqz(src, q_lens, n_out) {
 function decode(src, q_lens) {
     var stream = new IOStream(src);
 
-    //var q_len = stream.ReadUint32() // FIXME: remove
+    var q_len = stream.ReadUint32() // FIXME: delete me
     
-    var n_out = stream.ReadUint32();
-    stream.ReadUint32();
+    var n_out = stream.ReadUint32(); stream.ReadUint32();
 
-    //var n_in = stream.ReadUint32(); // FIXME: remove
-    //stream.ReadUint32();
+    var n_in = stream.ReadUint32(); stream.ReadUint32(); // FIXME: delete me
 
     //console.log("q_len",q_len)
     //console.log("n_in", n_in)
@@ -291,81 +289,88 @@ function pick_fqz_params(src, q_lens, qhist) {
 	nsym++;
     }
 
-    console.log("Nsym", nsym)
-    console.log("Max_sym", max_sym)
-    
-    // Default options
-    var params = {
-	qbits:     10,
-	qshift:    5,
-	qloc:      0,
-
-	pbits:     7,
-	pshift:    0,
-	ploc:      10,
-
-	dbits:     2,
-	dshift:    0,
-	dloc:      14,
-
-	sloc:      15,
-
-	max_sym:   max_sym,
-	nsym:      nsym,
-
-	do_qmap:   0,
-	do_dedup:  0,
-	fixed_len: (q_lens.length == 1) ? 1 : 0,
-	do_strand: 0,
-	do_rev:    0,
-	do_pos:    1,
-	do_delta:  1,
-	do_qtab:   0
-    }
-
+    var qshift = 5
+    var do_qmap = 0
     // Reduced symbol frequencies implies lower qshift and
     // a lookup table to go from qual to Q
     if (nsym <= 16) {
-	params.do_qmap = 1 // based on qhist
+	do_qmap = 1 // based on qhist
 	if (nsym <= 2)
-	    params.qshift = 1
+	    qshift = 1
 	else if (nsym <= 4)
-	    params.qshift = 2
+	    qshift = 2
 	else if (nsym <= 8)
-	    params.qshift = 3
+	    qshift = 3
 	else
-	    params.qshift = 4
+	    qshift = 4
     }
 
-    console.log(params)
-    return params
+    console.log("Nsym", nsym)
+    console.log("Max_sym", max_sym)
 
-//    // Example of customized options for 9827 data set (q40b)
-//    return {qbits:    9,
-//	    qshift:   5,
-//	    qloc:     7,
-//
-//	    pbits:    7,
-//	    pshift:   0,
-//	    ploc:     0,
-//
-//	    dbits:    2,
-//	    dshift:   0,
-//	    dloc:    14,
-//
-//	    sloc:    15,
-//
-//	    max_sym: max_sym,
-//	    nsym:    nsym,
-//
-//	    do_qmap:  0,
-//	    do_dedup: 0,
-//	    fixed_len: 1,
-//	    do_strand: 0,
-//	    do_rev:   0,
-//	    do_pos:   1,
-//	    do_delta: 1,
-//	    do_qtab:  0}
+    // Default options.
+    // Discarded for the defaults below, but we really need an exploration
+    // to figure out the optimal settings.
+
+    // return {
+    // 	qbits:     10,
+    // 	qshift:    qshift,
+    // 	qloc:      0,
+    //
+    // 	pbits:     4,
+    // 	pshift:    3,
+    // 	ploc:      10,
+    //
+    // 	dbits:     2,
+    // 	dshift:    1,
+    // 	dloc:      14,
+    //
+    // 	sloc:      15,
+    //
+    // 	max_sym:   max_sym,
+    // 	nsym:      nsym,
+    //
+    // 	do_qmap:   do_qmap,
+    // 	do_dedup:  0,
+    // 	fixed_len: (q_lens.length == 1) ? 1 : 0,
+    // 	do_strand: 0,
+    // 	do_rev:    0,
+    // 	do_pos:    1,
+    // 	do_delta:  1,
+    // 	do_qtab:   0
+    // }
+
+    // Example of customized options for HiSeq 2000 data set (9827_2#49)
+    // Comment out the "return params" above to enable this.
+    // Eg 100000000 => 40448353 (above params)
+    // vs 100000000 => 33596471 (these params)
+    // vs 100000000 => 50379546 (bzip2 -9)
+    // vs 100000000 => 40688810 (bsc -e2 -b100m)
+    return {qbits:     8+(qshift>4),
+	    qshift:    qshift,
+	    qloc:      7,
+
+	    pbits:     7,
+	    pshift:    q_lens[0] > 128 ? 1 : 0,
+	    ploc:      0,
+
+	    dbits:     qshift>4 ? 0 : 1,
+	    dshift:    3,
+	    dloc:      15,
+
+	    sloc:      15,
+
+	    max_sym:   max_sym,
+	    nsym:      nsym,
+
+	    do_qmap:   do_qmap,
+	    do_dedup:  0,
+	    fixed_len: (q_lens.length == 1) ? 1 : 0,
+	    do_strand: 0,
+	    do_rev:    0,
+	    do_pos:    1,
+	    do_delta:  (qshift <= 4) ? 1 : 0,
+	    do_qtab:   0}
 }
 
 function store_array(out, tab, size) {
@@ -465,6 +470,17 @@ function encode_fqz_meta_data(out, params, qhist, qtab, ptab, dtab, stab) {
     }
 
     if (params.qbits > 0) {
+//	// Eg map 0-44 to a smaller range, to improve context usage.
+//	// Makes q40 test set go from 33596471 to 33450075 (-0.4%)
+//	params.do_qtab = 1;
+//	for (var j = i = 0; i < params.max_sym; i++) {
+//	    qtab[i]=j;
+//	    if ((i%3)!=0 | i >= 28) j++
+//	    console.log("qtab[",i,"]=",qtab[i]);
+//	}
+//	for (; i < 256; i++)
+//	    qtab[i] = qtab[params.max_sym-1]
+
 	for (var i = 0; i < 256; i++)
 	    qtab[i] = i; // NOP for now
 
@@ -599,11 +615,12 @@ function encode(src, q_lens) {
     var stab  = new Array(2)
 
     var out = new IOStream("", 0, src.length*1.1 + 100); // FIXME: guestimate worst case
-    //out.WriteUint32(q_lens[0]); // FIXME
+    out.WriteUint32(q_lens[0]); // FIXME: delete me
     out.WriteUint32(src.length); out.WriteUint32(0); // uncompressed size
-    //out.WriteUint32(0); out.WriteUint32(0); // compressed size, unused...
+    out.WriteUint32(0); out.WriteUint32(0); // FIXME: delete me
     
     var params = pick_fqz_params(src, q_lens, qhist)
+    console.log(params)
     var out = encode_fqz_meta_data(out, params, qhist, qtab, ptab, dtab, stab)
     return encode_fqz(out, src, q_lens, params, qhist, qtab, ptab, dtab, stab)
 }

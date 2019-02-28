@@ -49,11 +49,15 @@ module.exports = class RangeCoder {
 
     RangeShiftLow(dst) {
 	if (this.low < 0xff000000 | this.carry) {
+	    // cached byte if low < (ff<<24) or
+	    // cached byte+1 otherwise
 	    dst.WriteByte(this.cache + this.carry);
 
 	    // Flush any stored FFs
 	    while (this.FFnum) {
 		//console.log("emit carry");
+		// a series of ff is low < (ff<<24)
+		// or a series of zeros if carry
 		dst.WriteByte(this.carry-1);
 		this.FFnum--;
 	    }
