@@ -99,9 +99,9 @@ e59190. \url{https://doi.org/10.1371/journal.pone.0059190}
 \subsubsection*{Range coding}
 
 The range coder is a byte-wise arithmetic coder that operates by
-repeatedly reducing a probability range (0.0 to 1.0) one symbol (byte)
-at a time with the complete compressed data can be represented by any
-value within the final range.
+repeatedly reducing a probability range (for example 0.0 to 1.0) one
+symbol (byte) at a time with the complete compressed data can be
+represented by any value within the final range.
 
 This is easiest demonstrated with a worked example, so let us imagine
 we have an alphabet of 4 symbols, `t', `c', `g', and `a' with
@@ -302,22 +302,18 @@ The frequencies are halved, taking sure to avoid any zeros.
 \subsubsection*{FQZComp Models}
 
 The FQZComp process utilises knowledge of the read lengths, complement
-(qualities reversed) status and strands (whether BAM flag READ2 is
-set), but in order to maintain a strict separation between data series
-these fields are stored (duplicated) within the quality data stream.
-It has discrete models for strand (whether READ1 or READ2 flag is
-set), whether the quality string is a duplicate of the previous line,
-quality string length, and the quality values themselves.  The strand,
-duplication and length models have no context, while the quality
-values have at most $2^{16}$ contexts, with the context construction
-being configured by parameters in the FQZComp data stream.
-
-The strand, complement and duplication models have a model $max\_sym$ value
-of 2, being boolean choices.  There are 4 read length models each
-having $max\_sym$ of 256.  Each model is used for the 4 successive
-bytes in a 32-bit length value.  The quality models have a
-configurable size of $max\_sym$, based on the parameter specified in
-the fqzcomp header described below.
+(qualities reversed) status and a generic parameter selector, but in
+order to maintain a strict separation between CRAM data series these
+fields are stored (duplicated) within the quality data stream
+itself. The strand and duplication models have no context and are have
+boolean values.  The parameter selector model also has no context
+associated with it and encodes $max\_sel$ distrinct values.  The
+quality model has a 16-bit context used to address an array of
+$2^{16}$ models, each model permitting $max\_sym$ distinct quality
+values.  The context used is defined by the FQZcomp parameters, of
+which there may be multiple sets, selected using the selector model.
+There are 4 read length models each having $max\_sym$ of 256.  Each
+model is used for the 4 successive bytes in a 32-bit length value.
 
 The entropy encoder used is shared between all models, so the bit
 stream is multiplexed together.
@@ -326,16 +322,21 @@ The quality values are modelled using a combined 16-bit context.  This
 context is constructed by adding sub-contexts together consisting of
 previous quality values, position along the current record, a running
 count (per record) of how many times the quality value has differed to
-the previous one (delta), and the strand (whether the current record
-is flagged as READ2), each shifted to a defined location within the
-combined context value ($qloc$, $ploc$, $dloc$ and $sloc$
-respectively).  The numeric values for each of these components can be
-passed through a lookup table ($qtab$ for quality, $ptab$ for
-positions and $dtab$ for running delta).  These convert the
-monotonically increasing range 0$\rightarrow$M to a monotonically
-increasing 0$\rightarrow$N.  For example if we wish to use the
-approximate position, we may uniformly map 0$\rightarrow$99 to
-0$\rightarrow$7 to utilise 3 bits of our 16-bit combined context.
+the previous one (delta), and an arbitrary stored selector value, each
+shifted to a defined location within the combined context value
+($qloc$, $ploc$, $dloc$ and $sloc$ respectively).  The qual, pos
+and delta sub-contexts are computed from the previous data while the
+selector, if used, is read directly from the compressed data stream.
+The selector may be used to switch parameter sets, or simply to group
+quality strings into arbitrary user-defined sub-sets.  The numeric
+values for each of these components can be passed through a lookup
+table ($qtab$ for quality, $ptab$ for positions, $dtab$ for
+running delta and $stab$ for turning the selector into a parameter
+index $s$).  These convert the monotonically increasing range
+0$\rightarrow$M to a monotonically increasing 0$\rightarrow$N.  For
+example if we wish to use the approximate position, we may uniformly
+map 0$\rightarrow$99 to 0$\rightarrow$7 to utilise 3 bits of our
+16-bit combined context.
 
 As some sequencing instruments produce binned qualities, eg 0, 10, 25,
 35, these values are squashed to incremental values from 0 to
@@ -376,42 +377,87 @@ by $dloc$ before adding to the combined context.
 The start of an FQZComp data stream consists of the parameters used by
 the decoder. The data layout is as follows.
 
-\begin{tabular}{lllp{10cm}}
+\begin{table}
+\centering
+\begin{tabular}{|r|r|r|r|r|p{8cm}|l|l|} 
 \hline
-\textbf{Bits} & \textbf{Type} & \textbf{Name} & \textbf{Description}\\
+\multicolumn{3}{|r|}{\textbf{Bits} }                   & \textbf{Type}  & \textbf{Name}                  & \multicolumn{3}{p{8.8cm}|}{\textbf{Description}} \\ 
 \hline
-8 & uint8 & $version$ & FQZComp format version: must be 5\\
-8 & uint8 & $flags$ & Bit-flags. From lowest bit to highest:\\
-& & & 1: $have\_qmap$: indicates quality map is present\\
-& & & 2: $do\_deup$: model\_dup will be used\\
-& & & 4: $do\_len$: model\_len will be used for every record, rather than first only.\\
-& & & 8: $do\_strand$: $model\_strand$ and $sloc$ will be used\\
-& & & 16: $do\_rev$: $model\_revcomp$ will be used. Must be set for CRAM v3.1\\
-& & & 32: $have\_ptab$: Load $ptab$, otherwise position contexts are unused\\
-& & & 64: $have\_dtab$: Load $dtab$, otherwise delta contexts are unused\\
-& & & 128: $have\_qtab$: Load $qtab$, otherwise set $qtab_i = i$\\
-8 & uint8 & $max\_sym$ & Total number of distinct quality values\\
+\multicolumn{3}{|r|}{8}                                & uint8          & $version$                      & \multicolumn{3}{p{8.8cm}|}{FQZComp format version: must be 5}\\
 \hline
-4 & uint4 (high) & qbits  & Total number of bits for quality context\\
-4 & uint4 (low)  & qshift & Left bit shift per successive quality in quality context\\
-4 & uint4 (high) & qloc   & Bit position of quality context\\
-4 & uint4 (low)  & sloc   & Bit position of strand context\\
-4 & uint4 (high) & ploc   & Bit position of position context\\
-4 & uint4 (low)  & dloc   & Bit position of delta context\\
+\multicolumn{3}{|r|}{8}                                & uint8          & $gflags$                       & \multicolumn{3}{p{8.8cm}|}{Global FQZcomp bit-flags. From lowest bit to highest:}\\
+\multicolumn{3}{|r|}{}                                 &                &                                & \multicolumn{3}{p{8.8cm}|}{1: $multi\_param$: indicates more than one parameter block is present.  Otherwise set $nparam = 1$} \\
+\multicolumn{3}{|r|}{}                                 &                &                                & \multicolumn{3}{p{8.8cm}|}{2: $have\_stab$: indicates the parameter selector is mapped through $stab$.  Otherwise set $stab_i = i$} \\ 
 \hline
-\multicolumn{4}{l}{\textit{If have\_qmap flag is set:}}\\
-$8*max\_sym$ & uint8 & $qmap$ & Map for ``unbinning'' quality values.\\
+
+\multicolumn{8}{|l|}{}\\[-0.7em]
+\multicolumn{8}{|l|}{\textit{If $multi\_param$ gflag is set:} } \\ 
+\cline{2-7}
+                       & \multicolumn{2}{r|}{8}        & uint8          & \multicolumn{1}{l|}{$nparam$ } & \multicolumn{2}{p{8.4cm}|}{Number of parameter blocks (defaults to 1)} & \\
+\cline{2-7}
+
+\multicolumn{8}{|l|}{}\\[-0.5em]
+\multicolumn{8}{|l|}{\textit{If $have\_tab$ gflag is set:} }                                                                                                                                 \\ 
+\cline{2-7}
+                       & \multicolumn{2}{r|}{8}        & uint8          & $max\_sel$                     & \multicolumn{2}{p{8.4cm}|}{Maximum parameter selector value} & \\
+                       & \multicolumn{2}{r|}{variable} & table          & $stab$                         & \multicolumn{2}{p{8.4cm}|}{Parameter selector table} & \\
+\cline{2-7}
+\multicolumn{8}{|l|}{}\\
 \hline
-\multicolumn{4}{l}{\textit{If have\_qtab flag is set:}}\\
-variable & uint8 & $qtab$ & Quality context lookup table\\
 \hline
-\multicolumn{4}{l}{\textit{If have\_qtab flag is set:}}\\
-variable & uint8 & $ptab$ & Position context lookup table\\
-\hline
-\multicolumn{4}{l}{\textit{If have\_qtab flag is set:}}\\
-variable & uint8 & $dtab$ & Delta context lookup table\\
+\multicolumn{8}{|l|}{}\\[-0.7em]
+\multicolumn{8}{|l|}{\textit{Parameter block: repeated $nparam$ times: (selected via $model\_sel$ and $stab$)}} \\ 
+\cline{2-7}
+                       & \multicolumn{2}{r|}{16}        & uint16        & $context$                      & \multicolumn{2}{p{8.4cm}|}{Starting context value} & \\
+\cline{2-7}
+                       & \multicolumn{2}{r|}{8}        & uint8          & $pflags$                       & \multicolumn{2}{p{8.4cm}|}{Per-parameter block bit-flags. From lowest bit to highest:} & \\
+                       & \multicolumn{2}{r|}{}         &                &                                & \multicolumn{2}{p{8.4cm}|}{1: $have\_qmap$: indicates quality map is present} & \\
+                       & \multicolumn{2}{r|}{}         &                &                                & \multicolumn{2}{p{8.4cm}|}{2: $do\_deup$: model\_dup will be used} & \\
+                       & \multicolumn{2}{r|}{}         &                &                                & \multicolumn{2}{p{8.4cm}|}{4: $do\_len$: model\_len will be used for every record.} & \\
+                       & \multicolumn{2}{r|}{}         &                &                                & \multicolumn{2}{p{8.4cm}|}{16: $do\_rev$: $model\_revcomp$ will be used. (CRAM v3.1)} & \\
+                       & \multicolumn{2}{r|}{}         &                &                                & \multicolumn{2}{p{8.4cm}|}{32: $have\_ptab$: Load $ptab$, otherwise position contexts are unused} & \\
+                       & \multicolumn{2}{r|}{}         &                &                                & \multicolumn{2}{p{8.4cm}|}{64: $have\_dtab$: Load $dtab$, otherwise delta contexts are unused} & \\
+                       & \multicolumn{2}{r|}{}         &                &                                & \multicolumn{2}{p{8.4cm}|}{128: $have\_qtab$: Load $qtab$, otherwise set $qtab_i = i$} &\\
+\cline{2-7}
+                       & \multicolumn{2}{r|}{8}        & uint8          & $max\_sym$                     & \multicolumn{2}{p{8.4cm}|}{Total number of distinct quality values} & \\ 
+\cline{2-7}
+                       & \multicolumn{2}{r|}{4}        & uint4 (high)   & qbits                          & \multicolumn{2}{p{8.4cm}|}{Total number of bits for quality context} & \\
+                       & \multicolumn{2}{r|}{4}        & uint4 (low)    & qshift                         & \multicolumn{2}{p{8.4cm}|}{Left bit shift per successive quality in quality context} & \\
+                       & \multicolumn{2}{r|}{4}        & uint4 (high)   & qloc                           & \multicolumn{2}{p{8.4cm}|}{Bit position of quality context} & \\
+                       & \multicolumn{2}{r|}{4}        & uint4 (low)    & unused                         & \multicolumn{2}{p{8.4cm}|}{Zero} & \\
+                       & \multicolumn{2}{r|}{4}        & uint4 (high)   & ploc                           & \multicolumn{2}{p{8.4cm}|}{Bit position of position context} & \\
+                       & \multicolumn{2}{r|}{4}        & uint4 (low)    & dloc                           & \multicolumn{2}{p{8.4cm}|}{Bit position of delta context }& \\ 
+\cline{2-7}
+
+& \multicolumn{6}{l|}{} & \\[-0.7em]
+\multicolumn{1}{|l|}{} & \multicolumn{6}{l|}{ \textit{If $have\_map$ pflag is set:} } & \\ 
+\cline{3-6}
+                       &  & variable                   & uint8[$max\_sym$]          & $qmap$             & Map for unbinning quality values. & & \\
+\cline{3-6}
+
+& \multicolumn{6}{l|}{} & \\[-0.5em]
+\multicolumn{1}{|l|}{} & \multicolumn{6}{l|}{ \textit{If $have\_qtab$ pflag is set:} } & \\ 
+\cline{3-6}
+                       &  & variable                   & table          & $qtab$                         & Quality context lookup table & & \\
+\cline{3-6}
+
+& \multicolumn{6}{l|}{} & \\[-0.5em]
+\multicolumn{1}{|l|}{} & \multicolumn{6}{l|}{ \textit{If $have\_tab$ pflag is set:} } & \\
+\cline{3-6}
+                       &  & variable                   & table          & $ptab$                         & Position context lookup table & & \\
+\cline{3-6}
+
+& \multicolumn{6}{l|}{} & \\[-0.5em]
+\multicolumn{1}{|l|}{} & \multicolumn{6}{l|}{ \textit{If $have\_tab$ pflag is set:} } & \\
+\cline{3-6}
+                       &  & variable                   & table          & $dtab$                         & Delta context lookup table & & \\
+\cline{3-6}
+& \multicolumn{6}{l|}{} & \\
+\cline{2-7}
+\multicolumn{8}{|l|}{}\\
 \hline
 \end{tabular}
+\end{table}
 
 As an example configuration, with 8 distinct quality values we would
 use $qmap$ to encode/decode qualities in the range 0-7 and can do
