@@ -23,17 +23,18 @@ module.exports = class IOStream {
 	return b
     }
 
+    ReadUint16() {
+	const i = (this.ReadByte()<<8) | this.ReadByte()
+	console.log("i=",i)
+	this.pos += 2
+	return i
+    }
+
     ReadUint32() {
 	const i = this.buf.readInt32LE(this.pos)
 	this.pos += 4
 	return i
     }
-
-//    ReadUint64() {
-//	const i = new Int64(this.buf.slice(this.pos, this.pos+7));
-//	this.pos += 8
-//	return i
-//    }
 
     ReadITF8() {
 	var i = this.buf[this.pos];
@@ -87,6 +88,13 @@ module.exports = class IOStream {
     WriteData(buf, len) {
 	for (var i = 0; i < len; i++)
 	    this.buf[this.pos++] = buf[i]
+    }
+
+    WriteUint16(u) {
+	//this.buf.writeInt16LE(u, this.pos);
+	this.WriteByte((u>>8)&0xff)
+	this.WriteByte(u&0xff)
+	this.pos += 2;
     }
 
     WriteUint32(u) {
