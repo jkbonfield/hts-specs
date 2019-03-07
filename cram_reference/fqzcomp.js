@@ -60,6 +60,7 @@ const QMAX = 256
 const FLAG_REV    = 1
 const FLAG_DEDUP  = 2
 const FLAG_FLEN   = 4
+const FLAG_SEL    = 8    // whether selector is used in context
 const FLAG_QMAP   = 16
 const FLAG_PTAB   = 32
 const FLAG_DTAB   = 64
@@ -84,10 +85,10 @@ function decode_fqz(src, q_lens, n_out) {
 	n_sel = src.ReadByte()
 	read_array(src, stab, 256);
     } else {
-	for (var i = 0; i < n_sel; i++)
+	for (var i = 0; i < nparam; i++)
 	    stab[i] = i;
 	for (; i < 256; i++)
-	    stab[i] = n_sel ? n_sel-1 : 0;
+	    stab[i] = nparam-1;
     }
 
     var qtab = new Array(nparam);
@@ -118,6 +119,7 @@ function decode_fqz(src, q_lens, n_out) {
 	var qshift = tmp&15
 	tmp = src.ReadByte()
 	var qloc = tmp>>4
+	var sloc = tmp&15
 	tmp = src.ReadByte()
 	var ploc = tmp>>4
 	var dloc = tmp&15
@@ -135,6 +137,9 @@ function decode_fqz(src, q_lens, n_out) {
 	    dshift:   -1, // In dtab?
 	    dloc:     dloc,
 
+	    sbits:    -1,
+	    sloc:     sloc,
+
 	    context:  context,
 
 	    max_sym:  max_sym,
@@ -143,6 +148,7 @@ function decode_fqz(src, q_lens, n_out) {
 	    do_rev:    pflags & FLAG_REV,
 	    do_dedup:  pflags & FLAG_DEDUP,
 	    fixed_len: pflags & FLAG_FLEN,
+	    do_sel:    pflags & FLAG_SEL,
 	    do_qmap:   pflags & FLAG_QMAP,
 	    do_pos:    pflags & FLAG_PTAB,
 	    do_delta:  pflags & FLAG_DTAB,
@@ -196,8 +202,8 @@ function decode_fqz(src, q_lens, n_out) {
     for (var i = 0; i < (1<<4); i++)
 	model_len[i] = new ByteModel(256)
 
-    var model_rev = new ByteModel(2)
-    var model_dup = new ByteModel(2)
+    var model_rev   = new ByteModel(2)
+    var model_dup   = new ByteModel(2)
 
     if (n_sel > 0)
 	var model_sel = new ByteModel(n_sel)
@@ -216,27 +222,30 @@ function decode_fqz(src, q_lens, n_out) {
 	    // Param selector
 	    if (n_sel > 0) {
 		s = model_sel.ModelDecode(src, rc)
-		console.log("Sel", s)
+		//console.log("Sel", s)
+	    } else {
+		s = 0;
 	    }
+	    x = stab[s]
 	    // Reset contexts at the start of each new record
-	    if (params[s].fixed_len >= 0) {
+	    if (params[x].fixed_len >= 0) {
 		// Not fixed or fixed but first record
 		var len = model_len[0].ModelDecode(src, rc)
 		len |= model_len[1].ModelDecode(src, rc) << 8
 		len |= model_len[2].ModelDecode(src, rc) << 16
 		len |= model_len[3].ModelDecode(src, rc) << 24
 		//console.log("Len", len)
-		if (params[s].fixed_len > 0)
-		    params[s].fixed_len = -len
+		if (params[x].fixed_len > 0)
+		    params[x].fixed_len = -len
 	    } else {
-		len = -params[s].fixed_len
+		len = -params[x].fixed_len
 		//console.log("reuse len", s, len)
 	    }
 	    q_lens.push(len)
 
 	    // FIXME: do_rev
 
-	    if (params[s].pflags & FLAG_DEDUP) {
+	    if (params[x].pflags & FLAG_DEDUP) {
 		console.log("decode dup")
 		if (model_dup.ModelDecode(src, rc)) {
 		    // Duplicate of last line
@@ -250,8 +259,7 @@ function decode_fqz(src, q_lens, n_out) {
 
 	    p = len;  // number of remaining bytes in this record
 	    var delta = 0;
-	    //var last  = 0;
-	    var last  = params[s].context
+	    var last  = 0;
 	    var qlast = 0;
 	    var q1    = 0;
 	}
@@ -259,21 +267,25 @@ function decode_fqz(src, q_lens, n_out) {
 	// Decode the current quality
 	var Q = model_qual[last].ModelDecode(src, rc)
 	//console.log("Ctx",last,Q)
-	var q = qmap[s][Q];
+	var q = qmap[x][Q];
 	output[i++] = q;
 
 	// Update context for next quality
-	qlast = ((qlast << params[s].qshift) + qtab[s][Q]); // >>> 0
-	last = ((qlast & ((1<<params[s].qbits)-1)) << params[s].qloc); // >>> 0
+	qlast = ((qlast << params[x].qshift) + qtab[x][Q]); // >>> 0
+	last  = params[x].context
+	last += ((qlast & ((1<<params[x].qbits)-1)) << params[x].qloc); // >>> 0
 
-	if (params[s].do_pos)
-	    last += ptab[s][Math.min(p, 1023)] << params[s].ploc
+	if (params[x].do_pos)
+	    last += ptab[x][Math.min(p, 1023)] << params[x].ploc
 
-	if (params[s].do_delta) {
-	    last += dtab[s][Math.min(delta, 255)] << params[s].dloc
+	if (params[x].do_delta) {
+	    last += dtab[x][Math.min(delta, 255)] << params[x].dloc
 	    delta += (q1 != q) ? 1 : 0
 	    q1 = q
 	}
+
+	if (params[x].do_sel)
+	    last += s << params[x].sloc
 
 	last = (last & 0xffff); // >>> 0; // coerce to +ve integer
 	p--
@@ -297,13 +309,21 @@ function decode(src, q_lens) {
 //----------------------------------------------------------------------
 // FQZComp encoder.
 
-function pick_fqz_params(src, q_lens, qhist) {
+function pick_fqz_params(src, q_lens, q_dirs, qhist) {
+    // Find cardinality of q_dirs
+    var qd_last = q_dirs[0];
+    for (var i = 0; i < q_dirs.length; i++)
+	if (q_dirs[i] != qd_last)
+	    break;
+    var qd_fixed = (i == q_dirs.length) ? 1 : 0
+
     // Scan input to find number of symbols and max symbol
     var nsym = 0
     var max_sym = 0
-    for (var s = 0; s < 2; s++)
-	for (var i = 0; i < 256; i++)
-	    qhist[s][i] = 0;
+
+    // selector == 0: Assume one single input dataset
+    for (var i = 0; i < 256; i++)
+	qhist[0][i] = 0;
 
     var rec = 0;
     var len = 0
@@ -311,7 +331,6 @@ function pick_fqz_params(src, q_lens, qhist) {
 	if (len == 0) {
 	    len = q_lens[rec < q_lens.length-1 ? rec++ : rec]
 	}
-	// selector == 0: Assume one single input dataset
 	qhist[0][src[i]]++;
 	len--;
     }
@@ -360,6 +379,9 @@ function pick_fqz_params(src, q_lens, qhist) {
 //	dshift:    0,
 //	dloc:      0,
 //
+//      sbits:     0,
+//      sloc:      0,
+//
 //	//sbits:     2,
 //	//do_stab:   1,
 //	sbits:     1,
@@ -372,6 +394,7 @@ function pick_fqz_params(src, q_lens, qhist) {
 //	do_qmap:   1,
 //	do_dedup:  0,
 //	fixed_len: 1,
+//	do_sel:  0,
 //	do_rev:    0,
 //	do_pos:    1,
 //	do_delta:  0,
@@ -390,6 +413,9 @@ function pick_fqz_params(src, q_lens, qhist) {
 //	dshift:    0,
 //	dloc:      0,
 //
+//      sbits:     0,
+//      sloc:      0,
+//
 //	//sbits:     2,
 //	//do_stab:   1,
 //	sbits:     1,
@@ -402,6 +428,7 @@ function pick_fqz_params(src, q_lens, qhist) {
 //	do_qmap:   0,
 //	do_dedup:  0,
 //	fixed_len: 1,
+//	do_sel:  0,
 //	do_rev:    0,
 //	do_pos:    1,
 //	do_delta:  0,
@@ -420,9 +447,11 @@ function pick_fqz_params(src, q_lens, qhist) {
 	     dshift:    3,
 	     dloc:      15,
 
-	     // NB: Also useful as a way of embedding strand and doing strand
+
+	     // NB: Also useful as a way of embedding sel and doing sel
 	     // specific contexts. Identical bar context. Eg 0<<15 or 1<<15.
 	     sbits:     0,
+	     sloc:      15,
 	     do_stab:   0,
 	     context:   (0<<15),
 
@@ -432,10 +461,33 @@ function pick_fqz_params(src, q_lens, qhist) {
 	     do_qmap:   do_qmap,
 	     do_dedup:  0,
 	     fixed_len: (q_lens.length == 1) ? 1 : 0,
+	     do_sel:    0,
 	     do_rev:    0,
 	     do_pos:    1,
 	     do_delta:  (qshift <= 4) ? 1 : 0,
-	     do_qtab:   0}]
+	     do_qtab:   0,
+
+	     // Override above with some attempt at using selectors
+	     // when the q_dirs are specific and non-fixed.
+	     qbits:     8+(qshift>4)-(qd_fixed==0),
+	     sbits:     1,
+	     sloc:      15-(qshift<=4), // read1 vs read2
+	     do_stab:   1,
+	     do_sel:    1,
+	     
+//	     // q4+dir: 7245769 with, 7353962 without. 1.5% saving
+//	     qbits:     6,
+//	     dbits:     2,
+//	     dshift:    2,
+//	     dloc:      13,
+//	     sbits:     1,
+//	     sloc:      15,
+//	     do_stab:   1,
+//	     do_sel:    1,
+
+	     // with 20 bits of context, q40 = 31741545
+	     // qbits 10, dbits 2, pbits 7, sbits 1
+	    }]
 }
 
 function store_array(out, tab, size) {
@@ -503,11 +555,10 @@ function encode_fqz_params(out, params, qhist, qtab, ptab, dtab, stab) {
         6, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7
     ]
 
-    for (var i = 0; i < 256; i++)
+    for (var i = 0; i < params.length; i++)
 	stab[i] = i; // 1 parameter set per selector value
-    stab[0] = 0;
-    for (var i = 1; i < 256; i++)
-	stab[i] = 1;
+    for (; i < 256; i++)
+	stab[i] = params.length-1;
 
     // Store global meta-data
     out.WriteByte(5);            // FQZ format number
@@ -528,19 +579,20 @@ function encode_fqz_params(out, params, qhist, qtab, ptab, dtab, stab) {
     // Store per-param meta-data
     for (var p = 0; p < params.length; p++) {
 	out.WriteUint16(params[p].context)
-	out.WriteByte((params[p].do_qtab  ? FLAG_QTAB : 0) |  // FLAG
-		      (params[p].do_delta ? FLAG_DTAB : 0) |
-		      (params[p].do_pos   ? FLAG_PTAB : 0) |
-		      (params[p].do_qmap  ? FLAG_QMAP : 0) |
-		      (params[p].fixed_len? FLAG_FLEN : 0) |
-		      (params[p].do_dedup ? FLAG_DEDUP: 0) |
-		      (params[p].do_rev   ? FLAG_REV  : 0))
+	out.WriteByte((params[p].do_qtab  ? FLAG_QTAB  : 0) |  // FLAG
+		      (params[p].do_delta ? FLAG_DTAB  : 0) |
+		      (params[p].do_pos   ? FLAG_PTAB  : 0) |
+		      (params[p].do_qmap  ? FLAG_QMAP  : 0) |
+		      (params[p].do_sel   ? FLAG_SEL   : 0) |
+		      (params[p].fixed_len? FLAG_FLEN  : 0) |
+		      (params[p].do_dedup ? FLAG_DEDUP : 0) |
+		      (params[p].do_rev   ? FLAG_REV   : 0))
 	if (params[p].do_qmap)
 	    out.WriteByte(params[p].nsym)
 	else
 	    out.WriteByte(params[p].max_sym)
 	out.WriteByte((params[p].qbits << 4) | (params[p].qshift))
-	out.WriteByte(params[p].qloc  << 4) // | ZERO.  Shuffle this...
+	out.WriteByte((params[p].qloc  << 4) | (params[p].sloc))
 	out.WriteByte((params[p].ploc  << 4) | (params[p].dloc))
 
 	if (params[p].do_qmap) {
@@ -601,7 +653,7 @@ function encode_fqz_params(out, params, qhist, qtab, ptab, dtab, stab) {
     return out
 }
 
-function encode_fqz(out, src, q_lens, params, qhist, qtab, ptab, dtab, stab) {
+function encode_fqz(out, src, q_lens, q_dirs, params, qhist, qtab, ptab, dtab, stab) {
     //console.log("0:",params[0])
     //console.log("1:",params[1])
 
@@ -622,9 +674,9 @@ function encode_fqz(out, src, q_lens, params, qhist, qtab, ptab, dtab, stab) {
     for (var i = 0; i < (1<<4); i++)
 	model_len[i] = new ByteModel(256)
 
-    var model_rev = new ByteModel(2)
-    var model_dup = new ByteModel(2)
-    var model_sel = new ByteModel(n_sel)
+    var model_rev    = new ByteModel(2)
+    var model_dup    = new ByteModel(2)
+    var model_sel    = new ByteModel(n_sel)
 
     // TODO: do_rev
     var rc = new RangeCoder(src)
@@ -641,25 +693,26 @@ function encode_fqz(out, src, q_lens, params, qhist, qtab, ptab, dtab, stab) {
 
     while (i < n_in) {
 	if (p == 0) {
-	    var s = 0 // single non-mixed sample
+	    //var s = 0 // single non-mixed sample
+	    var s = q_dirs[rec]
 	    if (params[0].sbits > 0) {// FIXME: check All params[].do_stab / sbits must be identical
-		console.log("Ssel", s)
+		//console.log("Ssel", s)
 	        model_sel.ModelEncode(out, rc, s)
 	    }
+	    var x = stab[s]
 
 	    // Reset contexts at the statr of each new record
-	    if (params[s].fixed_len) {
-		var len = q_lens[rec < q_lens.length-1 ? rec++ : rec]
-		if (params[s].fixed_len > 0) { // First length
+	    var len = q_lens[Math.min(q_lens.length-1, rec++)]
+	    if (params[x].fixed_len) {
+		if (params[x].fixed_len > 0) { // First length
 		    //console.log("Len", len)
 		    model_len[0].ModelEncode(out, rc, len       & 0xff)
 		    model_len[1].ModelEncode(out, rc, (len>>8)  & 0xff)
 		    model_len[2].ModelEncode(out, rc, (len>>16) & 0xff)
 		    model_len[3].ModelEncode(out, rc, (len>>24) & 0xff)
-		    params[s].fixed_len = -1; // indicate we've stored it once
+		    params[x].fixed_len = -1; // indicate we've stored it once
 		}
 	    } else {
-		var len = q_lens[rec < q_lens.length-1 ? rec++ : rec] // fetch next length
 		//console.log("len", len)
 		model_len[0].ModelEncode(out, rc, len       & 0xff)
 		model_len[1].ModelEncode(out, rc, (len>>8)  & 0xff)
@@ -667,37 +720,40 @@ function encode_fqz(out, src, q_lens, params, qhist, qtab, ptab, dtab, stab) {
 		model_len[3].ModelEncode(out, rc, (len>>24) & 0xff)
 	    }
 
-	    if (params[s].do_dedup)
+	    if (params[x].do_dedup)
 		process.exit(1) // FIXME
 
 	    p = len
 	    var delta = 0
 	    //var last  = 0
-	    var last  = params[s].context
+	    var last  = params[x].context
 	    var qlast = 0
 	    var q1    = 0
 	}
 
 	// Encode current quality
 	var q = src[i++]
-	model_qual[last].ModelEncode(out, rc, qhist[s][q])
-	//console.log("Ctx",last,qhist[s][q])
+	model_qual[last].ModelEncode(out, rc, qhist[x][q])
+	//console.log("Ctx",last,qhist[x][q])
 
 	// Update contexts for next quality
-	qlast = (qlast << params[s].qshift) + qtab[s][qhist[s][q]]
-	last = (qlast & ((1<<params[s].qbits)-1)) << params[s].qloc
+	qlast = (qlast << params[x].qshift) + qtab[x][qhist[x][q]]
+	last = (qlast & ((1<<params[x].qbits)-1)) << params[x].qloc
 
-	// 46.6-48.6 billion cycles with ifs + "<< params[s].?loc" shifts
+	// 46.6-48.6 billion cycles with ifs + "<< params[x].?loc" shifts
 	// 47.3-47.3 billion cycles with ifs
 	// 47.1-47.9 billion cycles without ifs
-	if (params[s].pbits > 0)
-	    last += ptab[s][Math.min(p, 1023)] << params[s].ploc
+	if (params[x].pbits > 0)
+	    last += ptab[x][Math.min(p, 1023)] << params[x].ploc
 
-	if (params[s].dbits > 0) {
-	    last += dtab[s][Math.min(delta, 255)] << params[s].dloc
+	if (params[x].dbits > 0) {
+	    last += dtab[x][Math.min(delta, 255)] << params[x].dloc
 	    delta += (q1 != q) ? 1 : 0
 	    q1 = q
 	}
+
+	if (params[x].do_sel)
+	    last += s << params[x].sloc
 
 	last = (last & 0xffff)
 	p--
@@ -707,7 +763,7 @@ function encode_fqz(out, src, q_lens, params, qhist, qtab, ptab, dtab, stab) {
     return out.buf.slice(0, out.pos)
 }
 
-function encode(src, q_lens) {
+function encode(src, q_lens, q_dirs) {
     var qhist = new Array(2)
     var qtab  = new Array(2)
     var ptab  = new Array(2)
@@ -724,10 +780,10 @@ function encode(src, q_lens) {
     var out = new IOStream("", 0, src.length*1.1 + 100); // FIXME: guestimate worst case
     out.WriteUint32(src.length); out.WriteUint32(0); // uncompressed size
     
-    var params = pick_fqz_params(src, q_lens, qhist)
+    var params = pick_fqz_params(src, q_lens, q_dirs, qhist)
     console.log(params)
     var out = encode_fqz_params(out, params, qhist, qtab, ptab, dtab, stab)
-    return encode_fqz(out, src, q_lens, params, qhist, qtab, ptab, dtab, stab)
+    return encode_fqz(out, src, q_lens, q_dirs, params, qhist, qtab, ptab, dtab, stab)
 }
 
 module.exports = { decode, encode }

@@ -22,15 +22,26 @@ if (!argv.d) {
     var len = 0;
     var j = 0;
     var q_lens = new Array
+    var q_dirs = new Array
     var q_len = 0
     for (var i = 0; i < buf.length; i++) {
-	if (buf[i] == "\n".charCodeAt(0)) {
+	if (buf[i] == "\n".charCodeAt(0) || buf[i] == "\t".charCodeAt(0)) {
 	    q_lens.push(len)
 	    if (q_len == 0)
 		q_len = len
 	    else if (q_len != len)
 		q_len = -1 // marker for multiple lengths
 	    len = 0;
+
+	    if (buf[i] == "\t".charCodeAt(0)) {
+		// parse 2nd token for read1/read2 status
+		var dir = ""
+		for (i++; i < buf.length && buf[i] != "\n".charCodeAt(0); i++)
+		    dir += String.fromCharCode(buf[i])
+		q_dirs.push(dir)
+	    } else {
+		q_dirs.push(0)
+	    }
 	} else {
 	    buf[j++] = buf[i] - 33; // ASCII phred to raw
 	    len++;
@@ -40,7 +51,7 @@ if (!argv.d) {
     if (q_len > 0)
 	q_lens = [q_lens[0]]
 
-    var buf2 = fqz.encode(buf, q_lens);
+    var buf2 = fqz.encode(buf, q_lens, q_dirs);
     process.stderr.write("Compress " +buf.length + " => " + buf2.length + "\n");
     fs.writeFileSync(fileout, buf2);
 
