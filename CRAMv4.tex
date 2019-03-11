@@ -17,6 +17,7 @@
 \usepackage{amssymb}
 \usepackage{fancyhdr}
 \usepackage{amsmath}
+\usepackage{float}
 \usepackage{algpseudocode}
 \usepackage{threeparttable}
 \renewcommand{\headrulewidth}{0pt}
@@ -28,7 +29,9 @@
 \usepackage[pdfborder={0 0 0}]{hyperref}
 \begin{document}
 
-
+% \floatstyle{boxed}
+\newfloat{program}{thHp}{prg}
+\floatname{program}{Program}
 
 \input{CRAMv3.ver}
 \title{CRAM format specification (version 4.0)}
@@ -171,25 +174,25 @@ This falls within the 0.8 to 1.0 symbol range for `a'.
 \end{tablenotes}
 \end{threeparttable}
 
-Note: The above example not how the actual implementation works\footnote{This implementation was designed by Eugene Shelwein.}.
+Note: The above example not how the actual implementation works\footnote{This implementation was designed by Eugene Shelwein, based on Michael Schindler's earlier work.}.
 For efficiency, we use integer values having a starting range of 0 to $2^{32}-1$.
-We write out the top 8-bits of the range when low and high become close, permitting the range to be expanded again so we can avoid needing arbitrary precision variables.
-For example (with 16-bit values for brevity) if range is 0x37ba to 0x37f0 then we can write out the top 8 bits (0x37) and shift low and high ranges left by 8 bits (0xba00 to 0xf040).
-Care needs to be taken to cope with ranges that are numerically close but straddling a top byte value, such as 0x37fe to 0x3801.
-In this case we reduce the high range to avoid running out of precision (high = 0x37ff) prior to flushing.
+We write out the top 8-bits of the range when low and high become the same value.
+Special care needs to be taken to handle small values are are numerically close but stradding a top byte value, such as 0x37ffba20 to 0x38000034.
+The decoder does not need to do anything special here, but the encoder must track the number of 0xff or 0x00 values to emit in order to avoid needing arbitrary precision integers.
 
-Pseudocode for the range codec decoding follows.  This implementation uses low and range instead of low and high, where $range = high - low$.
-\texttt{low} is a 64-bit unsigned integer while \texttt{range} and \texttt{code} (the next few bytes of the compressed data stream) are 32-bit unsigned integers.
+Pseudocode for the range codec decoding follows.
+This implementation uses code (next few bytes in the current bit-stream) and range instead of low and high, both 32-bit unsigned integers.
+This specification focuses on decoding, but given the additional complexity of the precision overflows in encoder we describe this implementation too.
 
 \textsc{RangeCreate} initialises the range coder, reading the first bytes of the compressed data stream.
 
 \begin{algorithmic}[1]
 \Procedure{RangeCreate}{}
   \settowidth{\maxwidth}{range\ }
-  \State \algalign{low}{\gets} $0$\Comment{64-bit unsigned}
+  %\State \algalign{low}{\gets} $0$\Comment{32-bit unsigned}
   \State \algalign{range}{\gets} $2^{32}-1$\Comment{Maximum 32-bit unsigned value}
   \State \algalign{code}{\gets} $0$\Comment{32-bit unsigned}
-  \For{$i \gets 0$ to $7$}
+  \For{$i \gets 0$ to $5$}
     \State $code \gets (code << 8) + $\Call{ReadByte}{}
   \EndFor
 \EndProcedure
@@ -207,20 +210,93 @@ Decoding each symbol is in two parts; getting the current frequency and updating
 \begin{algorithmic}[1]
 \Procedure{RangeDecode}{$sym\_low, sym\_freq, tot\_freq$}
   \settowidth{\maxwidth}{range\ }
-  \State \algalign{temp}{\gets} $sym\_low \times range$\Comment{Temp is an unsigned 32-bit integer}
-  \State \algalign{low}{\gets} $low + temp$
-  \State \algalign{code}{\gets} $code - temp$
+  \State \algalign{code}{\gets} $code - sym\_low \times range$
   \State \algalign{range}{\gets} $range \times sym\_freq$
+
   \While{$range < 2^{24}$} \Comment{Renormalise}
-    \If{$((low>>56) \ne ((low+range)>>56)$}\Comment{Close but straddles top byte}
-      \State $range = (low \bitor (2^{24}-1)) - low$
-    \EndIf
+    \settowidth{\maxwidth}{range\ }
+    \State \algalign{range}{\gets} $range << 8$
     \State \algalign{code}{\gets} $(code<<8) + $\Call{ReadByte}{}
-    \State \algalign{range}{\gets} $(range<<8)$
-    \State \algalign{low}{\gets} $(low<<8)$
   \EndWhile
 \EndProcedure
 \end{algorithmic}
+
+As mentioned above, the encoder is more complex as it cannot shift out the top byte until it has determined the value.
+This can take a considerable while if our current low / high (low + range) are very close but span a byte boundary, such as 0x37ffba20 to 0x38000034, where ultimately we will later emit either 0x37 or 0x38.
+To handle this case, when the range gets too small but the top bytes still differ, the encoder caches the top byte of low (0x37) and keeps track of how many 0xff or 0x00 values will need to be written out once we finally observe which value the range has shrunk to.
+
+The \textsc{RangeEncode} function is a straight forward reversal of the \textsc{RangeDecode}, with the exception of the special code for shifting the top byte out of the $low$ variable.
+
+\begin{algorithmic}[1]
+\Procedure{RangeEncode}{$sym\_low, sym\_freq, tot\_freq$}
+  \settowidth{\maxwidth}{old\_low\ }
+  \State \algalign{old\_low}{\gets} $low$
+  \State \algalign{range}{\gets} $range / tot\_freq$
+  \State \algalign{low}{\gets} $low + sym\_low \times range$
+  \State \algalign{range}{\gets} $range \times sym\_freq$
+
+  \Statex
+  \If{low < old\_low}
+    \State $carry \gets 1$ \Comment{overflow}
+  \EndIf
+  \While{$range < 2^{24}$} \Comment{Renormalise}
+    \settowidth{\maxwidth}{range\ }
+    \State \algalign{range}{\gets} $range << 8$
+    \State \Call{RangeShiftLow}{}
+  \EndWhile
+\EndProcedure
+\end{algorithmic}
+
+\textsc{RangeShiftLow} is the main heart of the encoder renormalisation.
+It tracks the total number of extra bytes to emit and $carry$ indicates whether they are a string of 0xFF or 0x00 values.
+
+\begin{algorithmic}[1]
+\Procedure{RangeShiftLow}{}
+  \If{$low < $ 0xff000000 or $carry \ne 0$}
+    \If{$carry = 0$}
+      \State \Call{WriteByte}{$cache$} \Comment{top byte $cache$ plus FFs}
+      \While{$FFnum > 0$}
+        \State \Call{WriteByte}{0xff}
+        \State $FFnum \gets FFnum - 1$
+      \EndWhile
+    \Else
+      \State \Call{WriteByte}{$cache + 1$} \Comment{top byte $cache+1$ plus 00s}
+      \While{$FFnum > 0$}
+        \State \Call{WriteByte}{0}
+        \State $FFnum \gets FFnum - 1$
+      \EndWhile
+    \EndIf
+    \State $cache \gets low >> 24$ \Comment{Copy of top byte ready for next flush}
+    \State $carry \gets 0$
+  \Else
+    \State $FFnum \gets FFnum + 1$
+  \EndIf
+  \Statex
+  \State $low \gets low << 8$
+\EndProcedure
+\end{algorithmic}
+
+For completeness, the Encoder initialisation and finish functions are below.
+
+\begin{algorithmic}[1]
+\Procedure{RangeEncodeStart}{}
+  \settowidth{\maxwidth}{FFnum\ }
+  \State \algalign{low}{\gets} $0$
+  \State \algalign{range}{\gets} $2^{32}-1$
+  \State \algalign{FFnum}{\gets} $0$
+  \State \algalign{carry}{\gets} $0$
+  \State \algalign{cache}{\gets} $0$
+\EndProcedure
+\end{algorithmic}
+
+\begin{algorithmic}[1]
+\Procedure{RangeEncodeEnd}{}
+  \For{$i \gets 0$ to $5$} \Comment{Flush any residual state in $low$}
+    \State \Call{RangeShiftLow}{}
+  \EndFor
+\EndProcedure
+\end{algorithmic}
+
 
 \subsubsection*{Statistical Modelling}
 
@@ -302,13 +378,26 @@ The frequencies are halved, taking sure to avoid any zeros.
 \subsubsection*{FQZComp Models}
 
 The FQZComp process utilises knowledge of the read lengths, complement
-(qualities reversed) status and a generic parameter selector, but in
-order to maintain a strict separation between CRAM data series these
-fields are stored (duplicated) within the quality data stream
-itself. The strand and duplication models have no context and are have
-boolean values.  The parameter selector model also has no context
-associated with it and encodes $max\_sel$ distrinct values.  The
-quality model has a 16-bit context used to address an array of
+(qualities reversed) status, and a generic parameter selector, but in
+order to maintain a strict separation between CRAM data series this
+knowledge is stored (duplicated) within the quality data stream
+itself.  Note the complement model is only needed in CRAM 3.1 as CRAM
+4 natively stores the quality in the original orientation already.
+Both reversed and duplication models have no context and are boolean
+values.
+
+The parameter selector model also has no context associated with it
+and encodes $max\_sel$ distrinct values.  The selector value may be
+quantised further using $stab$ to reduce the selector to fewer
+sets of parameters.  This is useful if we wish to use the selector
+bits directly in the context using the same parameters.  The selector
+is arbitrary and may be used for distinguishing READ1 from READ2, as
+a precalculated ``delta'' instead of the running total, distinguishing
+perfect alignments from imperfect ones, or any other factor that is
+shown to improve quality predictability and increase compression
+ratio.
+
+The quality model has a 16-bit context used to address an array of
 $2^{16}$ models, each model permitting $max\_sym$ distinct quality
 values.  The context used is defined by the FQZcomp parameters, of
 which there may be multiple sets, selected using the selector model.
@@ -316,35 +405,35 @@ There are 4 read length models each having $max\_sym$ of 256.  Each
 model is used for the 4 successive bytes in a 32-bit length value.
 
 The entropy encoder used is shared between all models, so the bit
-stream is multiplexed together.
+streams are multiplexed together.
 
-The quality values are modelled using a combined 16-bit context.  This
-context is constructed by adding sub-contexts together consisting of
-previous quality values, position along the current record, a running
-count (per record) of how many times the quality value has differed to
-the previous one (delta), and an arbitrary stored selector value, each
-shifted to a defined location within the combined context value
-($qloc$, $ploc$, $dloc$ and $sloc$ respectively).  The qual, pos
-and delta sub-contexts are computed from the previous data while the
-selector, if used, is read directly from the compressed data stream.
-The selector may be used to switch parameter sets, or simply to group
-quality strings into arbitrary user-defined sub-sets.  The numeric
-values for each of these components can be passed through a lookup
-table ($qtab$ for quality, $ptab$ for positions, $dtab$ for
-running delta and $stab$ for turning the selector into a parameter
-index $s$).  These convert the monotonically increasing range
-0$\rightarrow$M to a monotonically increasing 0$\rightarrow$N.  For
-example if we wish to use the approximate position, we may uniformly
+The 16-bit quality value context is constructed by adding sub-contexts
+together consisting of previous quality values, position along the
+current record, a running count (per record) of how many times the
+quality value has differed to the previous one (delta), and an
+arbitrary stored selector value, each shifted to a defined location
+within the combined context value ($qloc$, $ploc$, $dloc$, $rloc$ and
+$sloc$ respectively).  The qual, pos and delta sub-contexts are
+computed from the previous data while the selector, if used, is read
+directly from the compressed data stream.  The selector may be used to
+switch parameter sets, or simply to group quality strings into
+arbitrary user-defined sub-sets.  The numeric values for each of these
+components can be passed through lookup tables ($qtab$ for quality,
+$ptab$ for positions, $dtab$ for running delta and $stab$ for turning
+the selector $s$ into a parameter index $x$).  These all convert the
+monotonically increasing range 0$\rightarrow$M to a (usually smaller)
+monotonically increasing 0$\rightarrow$N.  For example if we wish to
+use the approximate position along a 100 byte string, we may uniformly
 map 0$\rightarrow$99 to 0$\rightarrow$7 to utilise 3 bits of our
 16-bit combined context.
 
-As some sequencing instruments produce binned qualities, eg 0, 10, 25,
+As some sequencing instruments produce binned qualities, e.g. 0, 10, 25,
 35, these values are squashed to incremental values from 0 to
 $max\_sym-1$ where $max\_sym$ is the maximum number of distinct
 quality values observed.  If this transform is required, the flag
 $have\_qmap$ will be set and a mapping table ($qmap$) will hold the
-original quality values.  These should be referenced once each value
-has been decoded.
+original quality values.  The decoded qualities will be the smaller
+mapped range.
 
 The quality sub-context is constructed by shifting left the previous
 quality sub-context by $qshift$ bits and adding the current quality
@@ -363,8 +452,8 @@ to \{0, 0, 0, 1\} and use $qshift$ of 1 instead, giving us
 knowledge of which of the previous 6 values were maximum quality.}
 
 The position context is simply the number of remaining quality values
-in this record, so is a value starting at record length and
-decrementing).  As with the quality context it may be passed through a
+in this record, so is a value starting at record length (minus 1) and
+decrementing.  As with the quality context it may be passed through a
 lookup table $ptab$ before shifting left by $ploc$ bits and adding to
 the combined context.
 
@@ -373,6 +462,58 @@ from one value to a different one.  Thus a run of identical values
 will not increase delta.  It gets reset to zero at the start of every
 record.  It may be adjusted by the $dtab$ lookup table and is shifted
 by $dloc$ before adding to the combined context.
+
+The selector value may also be used as a sub-context, if the $do\_sel$
+paramter is set.  The initial context value (reset per record) is
+defined within each parameter set, providing a more general purpose
+alternative to adding the selector value at a defined location
+($sloc$) into the context.
+
+Thus the full context can be updated after each decoded quality with
+the following pseudocode.  Note for brevity this is assuming the
+various parameters referred are global and updateable.
+
+\begin{algorithmic}[1]
+\Function{FQZUpdateContext}{$params, q$}
+  \State $ctx \gets params.context$ \Comment{Also the initial value}
+  \State $qctx \gets (qctx << params.qshift) + qtab_q$
+  \State $ctx   \gets ctx + ((qctx \bitand (2^{params.qbits}-1)) << params.qloc)$
+  \If{$params.pflags \bitand 32$} \Comment{$have\_ptab$}
+    \State $p \gets $\Call{Min}{$pos$, $1023$}
+    \State $ctx \gets ctx + (ptab_p << params.ploc)$
+  \EndIf
+  \If{$params.pflags \bitand 64$} \Comment{$have\_dtab$}
+    \State $d \gets $\Call{Min}{$delta$, $255$}
+    \State $ctx \gets ctx + (dtab_d << params.dloc)$
+    \If{$prevq \ne q$} 
+      \State $delta \gets delta+1$
+    \EndIf
+    \State $prevq \gets q$
+  \EndIf
+  \If{$params.pflags \bitand 8$} \Comment{$do\_sel$}
+    \State $ctx \gets ctx + (sel << params.sloc)$
+  \EndIf
+  \State \Return $ctx\bitand (2^{16}-1)$
+\EndFunction
+\end{algorithmic}
+
+In summary context is produced using the following models:
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lrlp{9cm}}
+ Model & Max symbol & Context size & Description\\
+\hline
+$model\_qual$ & $max\_sym$ & $2^{16}$ & Primary model for quality values \\
+$model\_len$  & 256        & 4       & Read length models with the context 0-3 being successive byte numbers (little endian order) \\
+$model\_rev$  & 2          & none    & Used if $pflags.do\_rev$ is defined.  Indicating which strings to reverse. \\
+$model\_dup$  & 2          & none    & Used if $pflags.do\_dup$ is defined.  Indicates if this whole string is a duplicate of the last one \\
+$model\_sel$  & $max\_sel$ & none    & Used if $hflags.multi\_param$ is defined and $nparam$ > 1. \\
+\end{tabular}
+\end{table}
+
+\pagebreak
+\subsubsection*{FQZComp Data Stream}
 
 The start of an FQZComp data stream consists of the parameters used by
 the decoder. The data layout is as follows.
@@ -393,7 +534,7 @@ the decoder. The data layout is as follows.
 \multicolumn{8}{|l|}{}\\[-0.7em]
 \multicolumn{8}{|l|}{\textit{If $multi\_param$ gflag is set:} } \\ 
 \cline{2-7}
-                       & \multicolumn{2}{r|}{8}        & uint8          & \multicolumn{1}{l|}{$nparam$ } & \multicolumn{2}{p{8.4cm}|}{Number of parameter blocks (defaults to 1)} & \\
+                       & \multicolumn{2}{r|}{8}        & uint8          & \multicolumn{1}{r|}{$nparam$ } & \multicolumn{2}{p{8.4cm}|}{Number of parameter blocks (defaults to 1)} & \\
 \cline{2-7}
 
 \multicolumn{8}{|l|}{}\\[-0.5em]
@@ -412,8 +553,9 @@ the decoder. The data layout is as follows.
 \cline{2-7}
                        & \multicolumn{2}{r|}{8}        & uint8          & $pflags$                       & \multicolumn{2}{p{8.4cm}|}{Per-parameter block bit-flags. From lowest bit to highest:} & \\
                        & \multicolumn{2}{r|}{}         &                &                                & \multicolumn{2}{p{8.4cm}|}{1: $have\_qmap$: indicates quality map is present} & \\
-                       & \multicolumn{2}{r|}{}         &                &                                & \multicolumn{2}{p{8.4cm}|}{2: $do\_deup$: model\_dup will be used} & \\
+                       & \multicolumn{2}{r|}{}         &                &                                & \multicolumn{2}{p{8.4cm}|}{2: $do\_dedup$: model\_dup will be used} & \\
                        & \multicolumn{2}{r|}{}         &                &                                & \multicolumn{2}{p{8.4cm}|}{4: $do\_len$: model\_len will be used for every record.} & \\
+                       & \multicolumn{2}{r|}{}         &                &                                & \multicolumn{2}{p{8.4cm}|}{8: $do\_sel$: model\_sel will be used.} & \\
                        & \multicolumn{2}{r|}{}         &                &                                & \multicolumn{2}{p{8.4cm}|}{16: $do\_rev$: $model\_revcomp$ will be used. (CRAM v3.1)} & \\
                        & \multicolumn{2}{r|}{}         &                &                                & \multicolumn{2}{p{8.4cm}|}{32: $have\_ptab$: Load $ptab$, otherwise position contexts are unused} & \\
                        & \multicolumn{2}{r|}{}         &                &                                & \multicolumn{2}{p{8.4cm}|}{64: $have\_dtab$: Load $dtab$, otherwise delta contexts are unused} & \\
@@ -421,12 +563,12 @@ the decoder. The data layout is as follows.
 \cline{2-7}
                        & \multicolumn{2}{r|}{8}        & uint8          & $max\_sym$                     & \multicolumn{2}{p{8.4cm}|}{Total number of distinct quality values} & \\ 
 \cline{2-7}
-                       & \multicolumn{2}{r|}{4}        & uint4 (high)   & qbits                          & \multicolumn{2}{p{8.4cm}|}{Total number of bits for quality context} & \\
-                       & \multicolumn{2}{r|}{4}        & uint4 (low)    & qshift                         & \multicolumn{2}{p{8.4cm}|}{Left bit shift per successive quality in quality context} & \\
-                       & \multicolumn{2}{r|}{4}        & uint4 (high)   & qloc                           & \multicolumn{2}{p{8.4cm}|}{Bit position of quality context} & \\
-                       & \multicolumn{2}{r|}{4}        & uint4 (low)    & unused                         & \multicolumn{2}{p{8.4cm}|}{Zero} & \\
-                       & \multicolumn{2}{r|}{4}        & uint4 (high)   & ploc                           & \multicolumn{2}{p{8.4cm}|}{Bit position of position context} & \\
-                       & \multicolumn{2}{r|}{4}        & uint4 (low)    & dloc                           & \multicolumn{2}{p{8.4cm}|}{Bit position of delta context }& \\ 
+                       & \multicolumn{2}{r|}{4}        & uint4 (high)   & $qbits$                        & \multicolumn{2}{p{8.4cm}|}{Total number of bits for quality context} & \\
+                       & \multicolumn{2}{r|}{4}        & uint4 (low)    & $qshift$                       & \multicolumn{2}{p{8.4cm}|}{Left bit shift per successive quality in quality context} & \\
+                       & \multicolumn{2}{r|}{4}        & uint4 (high)   & $qloc$                         & \multicolumn{2}{p{8.4cm}|}{Bit position of quality context} & \\
+                       & \multicolumn{2}{r|}{4}        & uint4 (low)    & $sloc$                         & \multicolumn{2}{p{8.4cm}|}{Bit position of selector context} & \\
+                       & \multicolumn{2}{r|}{4}        & uint4 (high)   & $ploc$                         & \multicolumn{2}{p{8.4cm}|}{Bit position of position context} & \\
+                       & \multicolumn{2}{r|}{4}        & uint4 (low)    & $dloc$                         & \multicolumn{2}{p{8.4cm}|}{Bit position of delta context }& \\ 
 \cline{2-7}
 
 & \multicolumn{6}{l|}{} & \\[-0.7em]
@@ -459,36 +601,37 @@ the decoder. The data layout is as follows.
 \end{tabular}
 \end{table}
 
-As an example configuration, with 8 distinct quality values we would
-use $qmap$ to encode/decode qualities in the range 0-7 and can do
-Order-3 entropy encoding by setting $qbits=9$ and $qshift=3$.  This
-leaves 7 bits remaining, which would could distribute as 3 bits of
-position (perhaps pos/16 or pos/32 to get approximate location), 3
-bits of running delta/4, and a bit to distinguish READ1 from READ2.
-Disagramatically the combined context layout would look this this:
-
-\includegraphics[width=250pt, keepaspectratio=true]{img/fqz_bits.png}
-
-In parameter terms we would use these values in the parameter block:
-
-\begin{tabular}{lrl}
-\hline
-\textbf{Field} & \textbf{Value} & \textbf{Note}\\
-\hline
-qbits  & 9  & 3 bit each $\implies$ Order-3 Markov model \\
-qshift & 3  & E.g. HiSeq X 8-binned, as 3 bit qmap \\
-qloc   & 0  & No $qtab$ needed, but $qmap$ converts qual to 0-7 range.\\
-\hline
-ploc   & 9  & With $ptab$ performing pos/32 function.\\
-\hline
-dloc   & 12 & With $dtab$ performing delta/4 function.\\
-\hline
-sloc   & 15 & 1 bit, iff $do\_strand$ flag is set\\
-\hline
-\end{tabular}
-
-FIXME: our worked example should include actual bytes for qmap, ptab
-and dtab too.
+% As an example configuration, with 8 distinct quality values we would
+% use $qmap$ to encode/decode qualities in the range 0-7 and can do
+% Order-3 entropy encoding by setting $qbits=9$ and $qshift=3$.  This
+% leaves 7 bits remaining, which would could distribute as 3 bits of
+% position (perhaps pos/16 or pos/32 to get approximate location), 3
+% bits of running delta/4, and a bit to distinguish READ1 from READ2.
+% Disagramatically the combined context layout would look this this:
+% 
+% \includegraphics[width=250pt, keepaspectratio=true]{img/fqz_bits.png}
+% FIXME: read2 becomes selector?
+% 
+% In parameter terms we would use these values in the parameter block:
+% 
+% \begin{tabular}{lrl}
+% \hline
+% \textbf{Field} & \textbf{Value} & \textbf{Note}\\
+% \hline
+% qbits  & 9  & 3 bit each $\implies$ Order-3 Markov model \\
+% qshift & 3  & E.g. HiSeq X 8-binned, as 3 bit qmap \\
+% qloc   & 0  & No $qtab$ needed, but $qmap$ converts qual to 0-7 range.\\
+% \hline
+% ploc   & 9  & With $ptab$ performing pos/32 function.\\
+% \hline
+% dloc   & 12 & With $dtab$ performing delta/4 function.\\
+% \hline
+% rloc   & 15 & 1 bit, iff $do\_read2$ flag is set\\
+% \hline
+% \end{tabular}
+% 
+% FIXME: our worked example should include actual bytes for qmap, ptab
+% and dtab too.
 
 
 \textsc{DecodeFQZParams} below describes the pseudocode for reading
@@ -500,52 +643,85 @@ the parameter block.
   \If{$vers \ne 5$}
     \State ERROR
   \EndIf
-  \settowidth{\maxwidth}{have\_qtab\ }
-  \State \algalign{flags}{\gets} \Call{ReadByte}{}
-  \State \algalign{have\_qtab}{\gets}    $flags\bitand 128$
-  \State \algalign{have\_dtab}{\gets}    $flags\bitand 64$
-  \State \algalign{have\_ptab}{\gets}    $flags\bitand 16$
-  \State \algalign{do\_rev}{\gets}    $flags\bitand 16$
-  \State \algalign{do\_strand}{\gets} $flags\bitand 8$
-  \State \algalign{do\_len}{\gets}    $flags\bitand 4$
-  \State \algalign{do\_dedup}{\gets}  $flags\bitand 2$
-  \State \algalign{have\_qmap}{\gets}   $flags\bitand 1$
-  \State \algalign{max\_sym}{\gets} \Call{ReadByte}{}
-  \If{$have\_qmap$}
-    \State $max\_sym \gets$ \Call{ReadByte}{}
-    \For{$i \gets 0$ to $max\_sym-1$}
-      \State $qmap_i \gets$ \Call{ReadByte}{}
+  \State $gflags \gets$ \Call{ReadByte}{}
+  \If{$gflags \bitand 1$} \Comment{$multi\_param$}
+    \State $nparam \gets$ \Call{ReadByte}{}
+    \State $max\_sel \gets nparam$
+  \Else
+    \State $nparam \gets 1$
+    \State $max\_sel \gets 0$
+  \EndIf
+  \If{$gflags \bitand 2$} \Comment{$have\_stab$}
+    \State $max\_sel \gets$ \Call{ReadByte}{}
+    \State $stab \gets$ \Call{ReadArray}{$256$}
+  \EndIf
+  \State $max\_sym \gets 0$
+  \For{$p \gets 0$ to $nparam-1$}
+    \State $param_p \gets$ \Call{DecodeFQZSingleParam}{}
+    \If {$max\_sym < param_p.max\_sym$}
+      \State $max\_sym \gets param_p.max\_sym$ \Comment{Maximum across all param sets}
+    \EndIf
+  \EndFor
+\EndProcedure
+\end{algorithmic}
+
+\begin{algorithmic}[1]
+\Function{DecodeFQZSingleParam}{}
+  \settowidth{\maxwidth}{p.have\_qtab\ }
+  \State \algalign{p.context}{\gets} \Call{ReadUint16}{}
+  \State \algalign{p.flags}{\gets} \Call{ReadByte}{}
+%  \State \algalign{have\_qtab}{\gets}    $p.flags\bitand 128$
+%  \State \algalign{have\_dtab}{\gets}    $p.flags\bitand 64$
+%  \State \algalign{have\_ptab}{\gets}    $p.flags\bitand 16$
+%  \State \algalign{do\_rev}{\gets}    $flags\bitand 16$
+%  \State \algalign{do\_sel}{\gets} $flags\bitand 8$
+%  \State \algalign{do\_len}{\gets}    $flags\bitand 4$
+%  \State \algalign{do\_dedup}{\gets}  $flags\bitand 2$
+%  \State \algalign{have\_qmap}{\gets}   $flags\bitand 1$
+  \State \algalign{p.max\_sym}{\gets} \Call{ReadByte}{}
+  \State \algalign{p.first\_len}{\gets} $1$
+  
+  \settowidth{\maxwidth}{p.qshift\ }
+  \State \algalign{x}{\gets} \Call{ReadByte}{}
+  \State \algalign{p.qbits}{\gets} $x \bdiv 16$
+  \State \algalign{p.qshift}{\gets} $x \bmod 16$
+  \State \algalign{x}{\gets} \Call{ReadByte}{}
+  \State \algalign{p.qloc}{\gets} $x \bdiv 16$
+  \State \algalign{p.sloc}{\gets} $x \bmod 16$
+  \State \algalign{x}{\gets} \Call{ReadByte}{}
+  \State \algalign{p.ploc}{\gets} $x \bdiv 16$
+  \State \algalign{p.dloc}{\gets} $x \bmod 16$
+
+  \If{$p.flags\bitand 1$} \Comment{Have qmap}
+    \For{$i \gets 0$ to $p.max\_sym-1$}
+      \State $p.qmap_i \gets$ \Call{ReadByte}{}
     \EndFor
   \EndIf
-  \settowidth{\maxwidth}{qshift\ }
-  \State \algalign{x}{\gets} \Call{ReadByte}{}
-  \State \algalign{qshift}{\gets} $x \bmod 16$
-  \State \algalign{qbits}{\gets} $x \bdiv 16$
-  \State \algalign{x}{\gets} \Call{ReadByte}{}
-  \State \algalign{sloc}{\gets} $x \bmod 16$
-  \State \algalign{qloc}{\gets} $x \bdiv 16$
-  \State \algalign{x}{\gets} \Call{ReadByte}{}
-  \State \algalign{dloc}{\gets} $x \bmod 16$
-  \State \algalign{ploc}{\gets} $x \bdiv 16$
-  \If{$have\_qtab$}
-    \State $qtab \gets$ \Call{ReadArray}{$256$}
+
+  \If{$p.flags\bitand 128$} \Comment{Have qtab}
+    \State $p.qtab \gets$ \Call{ReadArray}{$256$}
   \Else
     \For{$i \gets 0$ to $256$}
-      \State $qtab_i \gets i$
+      \State $p.qtab_i \gets i$
     \EndFor
   \EndIf
-  \If{$have\_ptab$}
-    \State $ptab \gets$ \Call{ReadArray}{$1024$}
+
+  \If{$p.flags\bitand 16$} \Comment{Have ptab}
+    \State $p.ptab \gets$ \Call{ReadArray}{$1024$}
   \EndIf
-  \If{$have\_dtab$}
-    \State $qtab \gets$ \Call{ReadArray}{$256$}
+
+  \If{$p.flags\bitand 64$} \Comment{Have dtab}
+    \State $p.qtab \gets$ \Call{ReadArray}{$256$}
   \EndIf
-\EndProcedure
+
+  \State \Return $p$
+\EndFunction
 \end{algorithmic}
 
 \textsc{FQZCreateModels} creates the decoder models based on the above
 parameters and the shared range coder.
 
+\begin{program}[H]
 \begin{algorithmic}[1]
 \Procedure{FQZCreateModels}{}
   \State $rc \gets $\Call{RangeCreate}{}
@@ -555,17 +731,14 @@ parameters and the shared range coder.
   \For{$i \gets 0$ to $2^{16}-1$}
     \State $model\_qual_i \gets $\Call{ModelCreate}{$max\_sym$}
   \EndFor
-  \If{$do\_strand$}
-    \State $model\_dup \gets $\Call{ModelCreate}{$2$}
-  \EndIf
-  \If{$do\_rev$}
-    \State $model\_rev \gets $\Call{ModelCreate}{$2$}
-  \EndIf
-  \If{$do\_strand$}
-    \State $model\_strand \gets $\Call{ModelCreate}{$2$}
+  \State $model\_dup \gets $\Call{ModelCreate}{$2$}
+  \State $model\_rev \gets $\Call{ModelCreate}{$2$}
+  \If{$max\_sel > 0$}
+    \State $model\_sel \gets $\Call{ModelCreate}{$max\_sel$}
   \EndIf
 \EndProcedure
 \end{algorithmic}
+\end{program}
 
 \textsc{ReadArray} reads an array $A$ of size $n$ which maps values 0
 to $n-1$ to a smaller range (0 to $m-1$), both monotonically
@@ -649,75 +822,89 @@ elsewhere).
 \algnewcommand{\Label}{\State\unskip}
 
 \begin{algorithmic}[1]
-  \Procedure{DecodeFQZ}{}
-  \If{$do\_len$}
-    \State $fixed\_len \gets $\Call{DecodeLength}{rc}
+\Function{DecodeFQZNewRecord}{}
+  \State $sel \gets 0$
+  \State $x \gets 0$
+  \If{$max\_sel > 0$} \Comment{Find parameter selector}
+    \State $sel \gets model\_sel.$\Call{ModelDecode}{$rc$}
+    \If{$have\_stab$}
+       \State $x \gets stab_{sel}$
+    \EndIf
+  \EndIf
+  \State $param \gets params_x$
+  
+  \Statex
+  \If{$param.do\_len$ or $param.first\_len$} \Comment{Decode read length}
+    \State $rec\_len \gets $\Call{DecodeLength}{rc}
+    \State $param.last\_len \gets rec\_len$
+    \If{$param.do\_len = 0$}
+      \State $param.first\_len = 0$
+    \EndIf
+  \Else
+    \State $rec\_len \gets param.last\_len$
+  \EndIf
+  \State $pos \gets rec\_len$
+
+  \Statex
+  \If{$param.do\_rev$} \Comment{Check if needs reversal}
+    \State $rev_{rec} \gets model\_rev.$\Call{ModelDecode}{$rc$}
+    \State $len_{rec} \gets rec\_len$
+  \EndIf
+  \State $rec \gets rec+1$
+
+  \Statex
+  \State $is\_dup \gets 0$
+  \If{$do\_dedup$} \Comment{Duplicate last string if appropriate}
+    \If{$model\_dup.$\Call{ModelDecode}{$rc$} > 0}
+      \State $is\_dup \gets 1$
+    \EndIf
   \EndIf
   \Statex
+  \State $qctx \gets 0$
+  \State $delta \gets 0$
+  \State $prevq \gets 0$
+  \State \Return $x$\Comment{Tabulated parameter selector}
+\EndFunction
+\end{algorithmic}
+
+\begin{algorithmic}[1]
+\Procedure{DecodeFQZ}{}
   \State $i \gets 0$\Comment{Position in total quality block}
-  \State $pos \gets 0$\Comment{Position in current sequence}
+  \State $pos \gets 0$\Comment{Remaining base count current quality string}
   \Label \texttt{next\_record:}
   \While{$i < buf\_len$}
-    \If{$pos = 0$}\Comment{Reset at start of each new record}
-    \If{$do\_len$}
-      \State $rec\_len \gets $\Call{DecodeLength}{rc}
-    \Else
-      \State $rec\_len \gets fixed\_len$
-    \EndIf
-    \State $pos \gets rec\_len$
-    \Statex
-    \If{$do\_rev$}
-      \State $rev_{rec} \gets model\_rev.$\Call{ModelDecode}{$rc$}
-      \State $len_{rec} \gets rec\_len$
-    \EndIf
-    \If{$do\_strand$}
-      \State $is\_read2 \gets model\_strand.$\Call{ModelDecode}{$rc$}
-    \EndIf
-    \Statex
-    \If{$do\_dedup$}
-      \State $is\_dup \gets model\_dup.$\Call{ModelDecode}{$rc$}
-      \If{$is\_dedup$}
+    \If{$pos = 0$}\Comment{Reset state at start of each new record}
+      \State $x \gets $\Call{DecodeFQZNewRecord}{}
+      \If {$is\_dup = 1$}
         \For{$j \gets 0$ to $rec\_len-1$}
           \State $output_{i+j} \gets output_{i+j-rec\_len}$
         \EndFor
         \State $i \gets i+rec\_len$
         \State $rec \gets rec+1$
         \State \Goto{next\_record}
-%        \State continue\Comment{back to While loop}
       \EndIf
+
+      \Statex
+      \State $param \gets params_x$
+      \State $last \gets param.context$
     \EndIf
     \Statex
-    \State $ctx, qctx, qlast, delta \gets 0$
+    \State $q \gets model\_qual_{ctx}.$\Call{ModelDecode}{$rc$}
+    \Comment{Decode a single quality value}
+    \If{$param.have\_qmap$}
+      \State $output_i \gets qmap_q$
+    \Else
+      \State $output_i \gets q$
+    \EndIf
+    \Statex
+    \State $ctx \gets $\Call{FQZUpdateContext}{$param, q$}\Comment{Also updates qlast, prevq and delta}
+    \Statex
+    \State $i \gets i + 1$
+    \State $pos \gets pos - 1$
+  \EndWhile
+  \If{$do\_rev$}
+    \State \Call{ReverseQualities}{$output\ ,rev,\ len$}
   \EndIf
-  \Statex
-  \State $q \gets model\_qual_{ctx}.$\Call{ModelDecode}{$rc$}
-  \Comment{Decode a single quality value}
-  \State $qual \gets qmap_q$
-  \State $output_i \gets qual$
-  \Statex
-  \State $qctx \gets (qctx << qshift) + qtab_q$\Comment{Update context}
-  \State $ctx \gets (qctx\bitand (2^{qbits}-1)) << qloc$
-  \If{$have\_ptab$}
-    \State $ctx \gets ctx + ($\Call{Min}{$1024,\ ptab_{pos}$}$ << ploc)$
-  \EndIf
-  \If{$do\_strand$}
-    \State $ctx \gets ctx + (is\_read2 << sloc)$
-  \EndIf
-  \If{$have\_dtab$}
-    \State $ctx \gets ctx + ($\Call{Min}{$255,\ dtab_{delta}$}$ << dloc)$
-  \EndIf
-  \State $ctx \gets ctx\bitand (2^{16}-1)$
-  \Statex
-  \If{$qlast \ne qual$}
-    \State $delta \gets delta + 1$
-  \EndIf
-  \State $qlast \gets qual$
-  \State $i \gets i + 1$
-  \State $pos \gets pos - 1$
-\EndWhile
-\If{$do\_rev$}
-  \State \Call{ReverseQualities}{$output\ ,rev,\ len$}
-\EndIf
 \EndProcedure
 \end{algorithmic}
 

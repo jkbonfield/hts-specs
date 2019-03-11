@@ -48,37 +48,52 @@ module.exports = class RangeCoder {
     }
 
     RangeShiftLow(dst) {
+	// We know range is < (1<<24) as we got here.  We already have a
+	// cached copy of 8 bits from low.  Is this correct, or does it need
+	// fixing?  Possible scenarios.
+	// 1. Low < 0xff000000 thus low+range < 0xffffffff and cache
+	//    cannot possibly change.  Output cache and as many ffs as needed.
+	// 2. We already detected an overflow in RangeEncode, setting carry.
+	//    In this case output cached byte + 1 and any 00s needed.
+	// 3. Neither case - range is low but we haven't yet detected if we're
+	//    XXffffff or XY000000 scenario.  Increase counter for ff/00s.
+
 	if (this.low < 0xff000000 | this.carry) {
-	    // cached byte if low < (ff<<24) or
-	    // cached byte+1 otherwise
+	    // cached byte if no overflow, byte+1 otherwise
 	    dst.WriteByte(this.cache + this.carry);
 
-	    // Flush any stored FFs
+	    // Flush any tracked FFs (no carry) or 00s (carry).
 	    while (this.FFnum) {
-		//console.log("emit carry");
-		// a series of ff is low < (ff<<24)
-		// or a series of zeros if carry
 		dst.WriteByte(this.carry-1);
 		this.FFnum--;
 	    }
+
 	    // Take a copy of top byte ready for next flush
 	    this.cache = this.low >>> 24;
 	    this.carry = 0;
 	} else {
-	    this.FFnum++; // keep track of number of overflows to write
+	    this.FFnum++; // keep track of number of trailing ff/00 bytes to write
 	}
 	this.low <<= 8;
 	this.low >>>= 0; // force to be +ve int
     }
 
     RangeEncode(dst, sym_low, sym_freq, tot_freq) {
-	var tmp = this.low
+	var old_low = this.low
 	this.range  = Math.floor(this.range / tot_freq)
 	this.low   += sym_low * this.range;
-	this.low >>>= 0; // force to be +ve int
+	this.low >>>= 0; // Truncate to +ve int so we can spot overflow
 	this.range *= sym_freq;
 
-	this.carry += (this.low < tmp) ? 1 : 0; // count overflows
+	// "low + sym*range < old_low" means we overflow; set carry.
+	// NB: can this.low < old_low occur twice before range < (1<<24)?
+	// We claim not, but prove it!
+	if (this.low < old_low) {
+	    if (this.carry != 0) console.log("ERROR: Multiple carry")
+	    this.carry = 1
+	}
+
+	// Renormalise if range gets too small
 	while (this.range < (1<<24)) {
 	    this.range *= 256;
 	    this.RangeShiftLow(dst);
