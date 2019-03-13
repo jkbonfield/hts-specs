@@ -752,11 +752,12 @@ function encode_fqz(out, src, q_lens, q_dirs, params, qhist, qtab, ptab, dtab, s
 
 	// Encode current quality
 	var q = src[i++]
-	model_qual[last].ModelEncode(out, rc, qhist[x][q])
+	var Q = qhist[x][q]
+	model_qual[last].ModelEncode(out, rc, Q)
 	//console.log("Ctx",last,qhist[x][q])
 
 	// Update contexts for next quality
-	qlast = (qlast << params[x].qshift) + qtab[x][qhist[x][q]]
+	qlast = (qlast << params[x].qshift) + qtab[x][Q]
 	last  = params[x].context
 	last += (qlast & ((1<<params[x].qbits)-1)) << params[x].qloc
 
@@ -768,8 +769,8 @@ function encode_fqz(out, src, q_lens, q_dirs, params, qhist, qtab, ptab, dtab, s
 
 	if (params[x].dbits > 0) {
 	    last += dtab[x][Math.min(delta, 255)] << params[x].dloc
-	    delta += (q1 != q) ? 1 : 0
-	    q1 = q
+	    delta += (q1 != Q) ? 1 : 0
+	    q1 = Q
 	}
 
 	if (params[x].do_sel)
