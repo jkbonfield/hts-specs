@@ -81,6 +81,36 @@ last modified on the date shown above.
 
 \subsection*{FQZComp quality codec}
 
+% Ideas to explore and TODO list:
+%
+% 1. Move param do_rev to global part.  It's all or nothing
+%
+% 2. Delta updates immediately on base 0 to base 1.  Maybe delay
+%    initialisation so prevq is 1st base qual.
+%
+% 3. ReadArray pseudocode needs fixing.
+%
+% 4. Add param sel_offset to subtract from decoded sel.
+%    Eg if we have 2 params and max_sel 3 (0..3) then we may want
+%    sel 0/1 for 1st param and sel 0/1 (sel_offset 2) for 2nd?
+%
+% 5. Add len_bytes to param so we don't need Model_len[4] always.
+%
+% 6. Permit do_term and term_sym to put in newlines (or whatever)
+%    after each record. (See 7 below for example)
+%
+% 7. Add dmap to apply to quals before doing the prevq != q check.
+%    Reason is maybe we're not compressing qualities!  Eg SA:Z: tag
+%    may be best using dmap , = 1 and everything else = 0.  Then
+%    ``chr4,100,5,blah''; becomes delta 000012223456666.  dtab to
+%    divide by 2 then allows it to track token number.
+%    Each semi-colon separated text is a new record (qlen) and they're
+%    joined together with term_sym (6. above).
+%
+% 8. Consider adding selector as context for model len, rev and dup.
+%    This is important on mixed data sets.  Do we want full sel, or
+%    quantised stab[sel]?
+
 The FQZComp quality codec uses an adaptive statistical model to
 predict the next quality value in a given context (comprised of
 previous quality values, position along this sequence, whether the
@@ -538,7 +568,7 @@ the decoder. The data layout is as follows.
 \cline{2-7}
 
 \multicolumn{8}{|l|}{}\\[-0.5em]
-\multicolumn{8}{|l|}{\textit{If $have\_tab$ gflag is set:} }                                                                                                                                 \\ 
+\multicolumn{8}{|l|}{\textit{If $have\_stab$ gflag is set:} }                                                                                                                                 \\ 
 \cline{2-7}
                        & \multicolumn{2}{r|}{8}        & uint8          & $max\_sel$                     & \multicolumn{2}{p{8.4cm}|}{Maximum parameter selector value} & \\
                        & \multicolumn{2}{r|}{variable} & table          & $stab$                         & \multicolumn{2}{p{8.4cm}|}{Parameter selector table} & \\
