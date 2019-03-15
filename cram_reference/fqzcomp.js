@@ -169,7 +169,7 @@ function decode_fqz_params(src) {
 
     var gflags = src.ReadByte()
     var nparam = (gflags & GFLAG_MULTI_PARAM) ? src.ReadByte() : 1
-    var max_sel = gflags.nparam > 1 ? gflags.nparam : 0
+    var max_sel = gflags.nparam > 1 ? gflags.nparam-1 : 0 // Note max_sel, not num_sel
 
     var stab = new Array(256);
     if (gflags & GFLAG_HAVE_STAB) {
@@ -190,6 +190,7 @@ function decode_fqz_params(src) {
 	if (gparams.max_sym < gparams.params[p].max_sym)
 	    gparams.max_sym = gparams.params[p].max_sym
     }
+
     return gparams
 }
 
@@ -198,7 +199,7 @@ function fqz_create_models(gparams) {
 
     model.qual = new Array(1<<16)
     for (var i = 0; i < (1<<16); i++)
-	model.qual[i] = new ByteModel(gparams.max_sym+1) // why +1?
+	model.qual[i] = new ByteModel(gparams.max_sym+1) // +1 as max value not num. values
 
     model.len = new Array(4)
     for (var i = 0; i < (1<<4); i++)
@@ -208,7 +209,7 @@ function fqz_create_models(gparams) {
     model.dup   = new ByteModel(2)
 
     if (gparams.max_sel > 0)
-	model.sel = new ByteModel(gparams.max_sel)
+	model.sel = new ByteModel(gparams.max_sel+1) // +1 as max value not num. values
 
     // TODO: do_rev
 
@@ -595,7 +596,9 @@ function encode_fqz_params(out, params, qhist, qtab, ptab, dtab, stab) {
 	out.WriteByte(params.length) // Number of parameter blocks.
 
     if (gflags & GFLAG_HAVE_STAB) {
-	out.WriteByte(1<<params[0].sbits)
+	var max_sel = 1<<params[0].sbits;
+	if (max_sel > 0) max_sel--;
+	out.WriteByte(max_sel)
 	store_array(out, stab, 256)
     }
     console.log("nparam",params.length,"sbits",params[0].sbits)
@@ -682,6 +685,7 @@ function encode_fqz(out, src, q_lens, q_dirs, params, qhist, qtab, ptab, dtab, s
     //console.log("1:",params[1])
 
     var max_sel = 1<<params[0].sbits
+    if (max_sel > 0) max_sel--
     var n_in = src.length
 
     // Create the models
@@ -700,7 +704,7 @@ function encode_fqz(out, src, q_lens, q_dirs, params, qhist, qtab, ptab, dtab, s
 
     var model_rev    = new ByteModel(2)
     var model_dup    = new ByteModel(2)
-    var model_sel    = new ByteModel(max_sel)
+    var model_sel    = new ByteModel(max_sel+1)
 
     // TODO: do_rev
     var rc = new RangeCoder(src)

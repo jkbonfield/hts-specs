@@ -24,9 +24,9 @@ module.exports = class IOStream {
     }
 
     ReadUint16() {
-	const i = (this.ReadByte()<<8) | this.ReadByte()
+	var i = this.ReadByte()<<8
+	i |= this.ReadByte()
 	console.log("i=",i)
-	this.pos += 2
 	return i
     }
 
@@ -94,7 +94,6 @@ module.exports = class IOStream {
 	//this.buf.writeInt16LE(u, this.pos);
 	this.WriteByte((u>>8)&0xff)
 	this.WriteByte(u&0xff)
-	this.pos += 2;
     }
 
     WriteUint32(u) {
