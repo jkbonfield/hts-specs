@@ -425,7 +425,7 @@ is arbitrary and may be used for distinguishing READ1 from READ2, as
 a precalculated ``delta'' instead of the running total, distinguishing
 perfect alignments from imperfect ones, or any other factor that is
 shown to improve quality predictability and increase compression
-ratio.
+ratio (average quality, number of mismatches, etc).
 
 The quality model has a 16-bit context used to address an array of
 $2^{16}$ models, each model permitting $max\_sym$ distinct quality
@@ -559,6 +559,7 @@ the decoder. The data layout is as follows.
 \multicolumn{3}{|r|}{8}                                & uint8          & $gflags$                       & \multicolumn{3}{p{8.8cm}|}{Global FQZcomp bit-flags. From lowest bit to highest:}\\
 \multicolumn{3}{|r|}{}                                 &                &                                & \multicolumn{3}{p{8.8cm}|}{1: $multi\_param$: indicates more than one parameter block is present.  Otherwise set $nparam = 1$} \\
 \multicolumn{3}{|r|}{}                                 &                &                                & \multicolumn{3}{p{8.8cm}|}{2: $have\_stab$: indicates the parameter selector is mapped through $stab$.  Otherwise set $stab_i = i$} \\ 
+\multicolumn{3}{|r|}{}                                 &                &                                & \multicolumn{3}{p{8.8cm}|}{4: $do\_rev$: $model\_revcomp$ will be used. (CRAM v3.1)} \\ 
 \hline
 
 \multicolumn{8}{|l|}{}\\[-0.7em]
@@ -582,11 +583,11 @@ the decoder. The data layout is as follows.
                        & \multicolumn{2}{r|}{16}        & uint16        & $context$                      & \multicolumn{2}{p{8.4cm}|}{Starting context value} & \\
 \cline{2-7}
                        & \multicolumn{2}{r|}{8}        & uint8          & $pflags$                       & \multicolumn{2}{p{8.4cm}|}{Per-parameter block bit-flags. From lowest bit to highest:} & \\
-                       & \multicolumn{2}{r|}{}         &                &                                & \multicolumn{2}{p{8.4cm}|}{1: $have\_qmap$: indicates quality map is present} & \\
+                       & \multicolumn{2}{r|}{}         &                &                                & \multicolumn{2}{p{8.4cm}|}{1: Reserved} & \\
                        & \multicolumn{2}{r|}{}         &                &                                & \multicolumn{2}{p{8.4cm}|}{2: $do\_dedup$: model\_dup will be used} & \\
                        & \multicolumn{2}{r|}{}         &                &                                & \multicolumn{2}{p{8.4cm}|}{4: $do\_len$: model\_len will be used for every record.} & \\
                        & \multicolumn{2}{r|}{}         &                &                                & \multicolumn{2}{p{8.4cm}|}{8: $do\_sel$: model\_sel will be used.} & \\
-                       & \multicolumn{2}{r|}{}         &                &                                & \multicolumn{2}{p{8.4cm}|}{16: $do\_rev$: $model\_revcomp$ will be used. (CRAM v3.1)} & \\
+                       & \multicolumn{2}{r|}{}         &                &                                & \multicolumn{2}{p{8.4cm}|}{16: $have\_qmap$: indicates quality map is present} & \\
                        & \multicolumn{2}{r|}{}         &                &                                & \multicolumn{2}{p{8.4cm}|}{32: $have\_ptab$: Load $ptab$, otherwise position contexts are unused} & \\
                        & \multicolumn{2}{r|}{}         &                &                                & \multicolumn{2}{p{8.4cm}|}{64: $have\_dtab$: Load $dtab$, otherwise delta contexts are unused} & \\
                        & \multicolumn{2}{r|}{}         &                &                                & \multicolumn{2}{p{8.4cm}|}{128: $have\_qtab$: Load $qtab$, otherwise set $qtab_i = i$} &\\

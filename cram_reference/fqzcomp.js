@@ -57,7 +57,6 @@ function read_array(src, tab, size) {
 
 const QMAX = 256
 
-const FLAG_REV    = 1
 const FLAG_DEDUP  = 2
 const FLAG_FLEN   = 4
 const FLAG_SEL    = 8    // whether selector is used in context
@@ -68,6 +67,7 @@ const FLAG_QTAB   = 128
 
 const GFLAG_MULTI_PARAM = 1
 const GFLAG_HAVE_STAB   = 2
+const GFLAG_DO_REV      = 4
 
 // Compute a new context from our current state and qual q
 function fqz_update_ctx(params, state, q) {
@@ -102,7 +102,6 @@ function decode_fqz_single_param(src) {
     p.context = src.ReadUint16()
     p.pflags  = src.ReadByte()
 
-    p.do_rev    = p.pflags & FLAG_REV
     p.do_dedup  = p.pflags & FLAG_DEDUP
     p.fixed_len = p.pflags & FLAG_FLEN
     p.do_sel    = p.pflags & FLAG_SEL
@@ -612,8 +611,7 @@ function encode_fqz_params(out, params, qhist, qtab, ptab, dtab, stab) {
 		      (params[p].do_qmap  ? FLAG_QMAP  : 0) |
 		      (params[p].do_sel   ? FLAG_SEL   : 0) |
 		      (params[p].fixed_len? FLAG_FLEN  : 0) |
-		      (params[p].do_dedup ? FLAG_DEDUP : 0) |
-		      (params[p].do_rev   ? FLAG_REV   : 0))
+		      (params[p].do_dedup ? FLAG_DEDUP : 0))
 	if (params[p].do_qmap)
 	    out.WriteByte(params[p].nsym)
 	else
