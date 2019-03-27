@@ -515,7 +515,7 @@ various parameters referred are global and updateable.
   \If{$params.pflags \bitand 64$} \Comment{$have\_dtab$}
     \State $d \gets $\Call{Min}{$delta$, $255$}
     \State $ctx \gets ctx + (dtab_d << params.dloc)$
-    \If{$prevq \ne q$} 
+    \If{$prevq \ne q$}
       \State $delta \gets delta+1$
     \EndIf
     \State $prevq \gets q$
@@ -550,26 +550,26 @@ the decoder. The data layout is as follows.
 
 \begin{table}
 \centering
-\begin{tabular}{|r|r|r|r|r|p{8cm}|l|l|} 
+\begin{tabular}{|r|r|r|r|r|p{8cm}|l|l|}
 \hline
-\multicolumn{3}{|r|}{\textbf{Bits} }                   & \textbf{Type}  & \textbf{Name}                  & \multicolumn{3}{p{8.8cm}|}{\textbf{Description}} \\ 
+\multicolumn{3}{|r|}{\textbf{Bits} }                   & \textbf{Type}  & \textbf{Name}                  & \multicolumn{3}{p{8.8cm}|}{\textbf{Description}} \\
 \hline
 \multicolumn{3}{|r|}{8}                                & uint8          & $version$                      & \multicolumn{3}{p{8.8cm}|}{FQZComp format version: must be 5}\\
 \hline
 \multicolumn{3}{|r|}{8}                                & uint8          & $gflags$                       & \multicolumn{3}{p{8.8cm}|}{Global FQZcomp bit-flags. From lowest bit to highest:}\\
 \multicolumn{3}{|r|}{}                                 &                &                                & \multicolumn{3}{p{8.8cm}|}{1: $multi\_param$: indicates more than one parameter block is present.  Otherwise set $nparam = 1$} \\
-\multicolumn{3}{|r|}{}                                 &                &                                & \multicolumn{3}{p{8.8cm}|}{2: $have\_stab$: indicates the parameter selector is mapped through $stab$.  Otherwise set $stab_i = i$} \\ 
-\multicolumn{3}{|r|}{}                                 &                &                                & \multicolumn{3}{p{8.8cm}|}{4: $do\_rev$: $model\_revcomp$ will be used. (CRAM v3.1)} \\ 
+\multicolumn{3}{|r|}{}                                 &                &                                & \multicolumn{3}{p{8.8cm}|}{2: $have\_stab$: indicates the parameter selector is mapped through $stab$.  Otherwise set $stab_i = i$} \\
+\multicolumn{3}{|r|}{}                                 &                &                                & \multicolumn{3}{p{8.8cm}|}{4: $do\_rev$: $model\_revcomp$ will be used. (CRAM v3.1)} \\
 \hline
 
 \multicolumn{8}{|l|}{}\\[-0.7em]
-\multicolumn{8}{|l|}{\textit{If $multi\_param$ gflag is set:} } \\ 
+\multicolumn{8}{|l|}{\textit{If $multi\_param$ gflag is set:} } \\
 \cline{2-7}
                        & \multicolumn{2}{r|}{8}        & uint8          & \multicolumn{1}{r|}{$nparam$ } & \multicolumn{2}{p{8.4cm}|}{Number of parameter blocks (defaults to 1)} & \\
 \cline{2-7}
 
 \multicolumn{8}{|l|}{}\\[-0.5em]
-\multicolumn{8}{|l|}{\textit{If $have\_stab$ gflag is set:} }                                                                                                                                 \\ 
+\multicolumn{8}{|l|}{\textit{If $have\_stab$ gflag is set:} }                                                                                                                                 \\
 \cline{2-7}
                        & \multicolumn{2}{r|}{8}        & uint8          & $max\_sel$                     & \multicolumn{2}{p{8.4cm}|}{Maximum parameter selector value} & \\
                        & \multicolumn{2}{r|}{variable} & table          & $stab$                         & \multicolumn{2}{p{8.4cm}|}{Parameter selector table} & \\
@@ -578,7 +578,7 @@ the decoder. The data layout is as follows.
 \hline
 \hline
 \multicolumn{8}{|l|}{}\\[-0.7em]
-\multicolumn{8}{|l|}{\textit{Parameter block: repeated $nparam$ times: (selected via $model\_sel$ and $stab$)}} \\ 
+\multicolumn{8}{|l|}{\textit{Parameter block: repeated $nparam$ times: (selected via $model\_sel$ and $stab$)}} \\
 \cline{2-7}
                        & \multicolumn{2}{r|}{16}        & uint16        & $context$                      & \multicolumn{2}{p{8.4cm}|}{Starting context value} & \\
 \cline{2-7}
@@ -592,24 +592,24 @@ the decoder. The data layout is as follows.
                        & \multicolumn{2}{r|}{}         &                &                                & \multicolumn{2}{p{8.4cm}|}{64: $have\_dtab$: Load $dtab$, otherwise delta contexts are unused} & \\
                        & \multicolumn{2}{r|}{}         &                &                                & \multicolumn{2}{p{8.4cm}|}{128: $have\_qtab$: Load $qtab$, otherwise set $qtab_i = i$} &\\
 \cline{2-7}
-                       & \multicolumn{2}{r|}{8}        & uint8          & $max\_sym$                     & \multicolumn{2}{p{8.4cm}|}{Total number of distinct quality values} & \\ 
+                       & \multicolumn{2}{r|}{8}        & uint8          & $max\_sym$                     & \multicolumn{2}{p{8.4cm}|}{Total number of distinct quality values} & \\
 \cline{2-7}
                        & \multicolumn{2}{r|}{4}        & uint4 (high)   & $qbits$                        & \multicolumn{2}{p{8.4cm}|}{Total number of bits for quality context} & \\
                        & \multicolumn{2}{r|}{4}        & uint4 (low)    & $qshift$                       & \multicolumn{2}{p{8.4cm}|}{Left bit shift per successive quality in quality context} & \\
                        & \multicolumn{2}{r|}{4}        & uint4 (high)   & $qloc$                         & \multicolumn{2}{p{8.4cm}|}{Bit position of quality context} & \\
                        & \multicolumn{2}{r|}{4}        & uint4 (low)    & $sloc$                         & \multicolumn{2}{p{8.4cm}|}{Bit position of selector context} & \\
                        & \multicolumn{2}{r|}{4}        & uint4 (high)   & $ploc$                         & \multicolumn{2}{p{8.4cm}|}{Bit position of position context} & \\
-                       & \multicolumn{2}{r|}{4}        & uint4 (low)    & $dloc$                         & \multicolumn{2}{p{8.4cm}|}{Bit position of delta context }& \\ 
+                       & \multicolumn{2}{r|}{4}        & uint4 (low)    & $dloc$                         & \multicolumn{2}{p{8.4cm}|}{Bit position of delta context }& \\
 \cline{2-7}
 
 & \multicolumn{6}{l|}{} & \\[-0.7em]
-\multicolumn{1}{|l|}{} & \multicolumn{6}{l|}{ \textit{If $have\_map$ pflag is set:} } & \\ 
+\multicolumn{1}{|l|}{} & \multicolumn{6}{l|}{ \textit{If $have\_map$ pflag is set:} } & \\
 \cline{3-6}
                        &  & variable                   & uint8[$max\_sym$]          & $qmap$             & Map for unbinning quality values. & & \\
 \cline{3-6}
 
 & \multicolumn{6}{l|}{} & \\[-0.5em]
-\multicolumn{1}{|l|}{} & \multicolumn{6}{l|}{ \textit{If $have\_qtab$ pflag is set:} } & \\ 
+\multicolumn{1}{|l|}{} & \multicolumn{6}{l|}{ \textit{If $have\_qtab$ pflag is set:} } & \\
 \cline{3-6}
                        &  & variable                   & table          & $qtab$                         & Quality context lookup table & & \\
 \cline{3-6}
@@ -639,12 +639,12 @@ the decoder. The data layout is as follows.
 % position (perhaps pos/16 or pos/32 to get approximate location), 3
 % bits of running delta/4, and a bit to distinguish READ1 from READ2.
 % Disagramatically the combined context layout would look this this:
-% 
+%
 % \includegraphics[width=250pt, keepaspectratio=true]{img/fqz_bits.png}
 % FIXME: read2 becomes selector?
-% 
+%
 % In parameter terms we would use these values in the parameter block:
-% 
+%
 % \begin{tabular}{lrl}
 % \hline
 % \textbf{Field} & \textbf{Value} & \textbf{Note}\\
@@ -660,7 +660,7 @@ the decoder. The data layout is as follows.
 % rloc   & 15 & 1 bit, iff $do\_read2$ flag is set\\
 % \hline
 % \end{tabular}
-% 
+%
 % FIXME: our worked example should include actual bytes for qmap, ptab
 % and dtab too.
 
@@ -711,7 +711,7 @@ the parameter block.
 %  \State \algalign{have\_qmap}{\gets}   $flags\bitand 1$
   \State \algalign{p.max\_sym}{\gets} \Call{ReadByte}{}
   \State \algalign{p.first\_len}{\gets} $1$
-  
+
   \settowidth{\maxwidth}{p.qshift\ }
   \State \algalign{x}{\gets} \Call{ReadByte}{}
   \State \algalign{p.qbits}{\gets} $x \bdiv 16$
@@ -863,7 +863,7 @@ elsewhere).
     \EndIf
   \EndIf
   \State $param \gets params_x$
-  
+
   \Statex
   \If{$param.do\_len$ or $param.first\_len$} \Comment{Decode read length}
     \State $rec\_len \gets $\Call{DecodeLength}{rc}
@@ -1083,7 +1083,7 @@ retrieval from type-specific data streams at this position.
 For position 0, the TYPE field indicates whether this record is an
 exact duplicate of a prior read name or has been encoded as a delta to
 an earlier one.
-  
+
 \item{\textbf{DUP}, \textbf{DIFF}:}
 These types are fetched for position 0, at the start of each new
 identifier.  The value is an integer value describing how many reads
@@ -1251,7 +1251,7 @@ to be observed.  The order of evaluation is (TODO).  For example value
   \If{$flags \bitand 128$} \Comment{PACK}
     \State $data \gets $\Call{DecodePack}{$data$}
   \EndIf
-  \State $out \gets data$ 
+  \State $out \gets data$
   \EndFunction
 \end{algorithmic}
 
@@ -1319,7 +1319,7 @@ The compressed data stream follows, encoded according to the other
 format bit flags. Once the bytes have been uncompressed a new data
 stream is generated by replacing each byte value $x$ with the unsigned
 32-bit value $V_x$, thus growing the byte stream by 4 times.
-  
+
 \begin{algorithmic}[1]
 \Function{DecodeDictMeta}{$len$}
   \State $stride \gets $\Call{ReadByte}{}
@@ -1351,7 +1351,7 @@ stream is generated by replacing each byte value $x$ with the unsigned
   \State $v \gets data_j$
   \State $out_{i+0} \gets (D_v >> \ 0) \bitand 255$
   \State $out_{i+1} \gets (D_v >> \ 8) \bitand 255$
-  \State $out_{i+2} \gets (D_v >> 16) \bitand 255$ 
+  \State $out_{i+2} \gets (D_v >> 16) \bitand 255$
   \State $out_{i+3} \gets (D_v >> 24) \bitand 255$
   \State $i \gets i + 4$ \Comment{Only implemented for $stride = 4$}
  \EndFor
@@ -1418,7 +1418,7 @@ are too high.
 % run-lengths (optionally order-0 entropy encoded) followed by list of
 % run-lengths followed by a list of literals (non-run byte values),
 % entropy encoded using whatever scheme the format flags indicate.
-% 
+%
 % The data stream starts with 7-bit encoded uncompressed meta-data size
 % followed by 7-bit encoded uncompressed literal-data size.  The bottom
 % bit of the meta-data size is a flag to indicate whether the
@@ -1428,7 +1428,7 @@ are too high.
 % encoded, its byte stream starts with a 7-bit encoded size of the
 % compressed run-length stream (otherwise this is the same as the
 % uncompressed meta-data size).
-% 
+%
 % The run length mechanism used always stores run lengths for certain
 % byte values and never for other values, irrespective of the run
 % lengths.  The run-length byte stream starts with an 8-bit value
@@ -1438,13 +1438,13 @@ are too high.
 % using the big-endian 7-bit notation, but as $length-1$ given a run
 % length of zero can never be stored (the literal would not be
 % present).
-% 
+%
 % For example if `R' and `U` are deemed to be worthy of
 % storing run lengths while `N' is not, then for the string
 % ``URRRRUNNURUUN'' the byte stream starts with
 % \{2, `R',`U'\}, the run lengths (minus one) for `U' and `R's only
 % \{0,3,0,0,0,1\}, and literals \{U,R,U,N,N,U,R,U,N\}.
-% 
+%
 % FIXME: reimplement this using adaptive arith with run map being
 % computed on-the-fly (run using literal as context, or delta and run0
 % only).
