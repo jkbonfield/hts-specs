@@ -425,7 +425,8 @@ is arbitrary and may be used for distinguishing READ1 from READ2, as
 a precalculated ``delta'' instead of the running total, distinguishing
 perfect alignments from imperfect ones, or any other factor that is
 shown to improve quality predictability and increase compression
-ratio (average quality, number of mismatches, etc).
+ratio (average quality, number of mismatches, tile, swathe, proximity
+to tile edge, etc).
 
 The quality model has a 16-bit context used to address an array of
 $2^{16}$ models, each model permitting $max\_sym$ distinct quality
