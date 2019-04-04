@@ -20,6 +20,8 @@
 \usepackage{float}
 \usepackage{algpseudocode}
 \usepackage{threeparttable}
+\usepackage{xfrac}
+\usepackage{tikz}
 \renewcommand{\headrulewidth}{0pt}
 \renewcommand{\footrulewidth}{0pt}
 
@@ -79,57 +81,7 @@ last modified on the date shown above.
 }
 \makeatother
 
-\subsection*{FQZComp quality codec}
-
-% Ideas to explore and TODO list:
-%
-% 1. Move param do_rev to global part.  It's all or nothing
-%
-% 2. Delta updates immediately on base 0 to base 1.  Maybe delay
-%    initialisation so prevq is 1st base qual.
-%
-% 3. ReadArray pseudocode needs fixing.
-%
-% 4. Add param sel_offset to subtract from decoded sel.
-%    Eg if we have 2 params and max_sel 3 (0..3) then we may want
-%    sel 0/1 for 1st param and sel 0/1 (sel_offset 2) for 2nd?
-%
-% 5. Add len_bytes to param so we don't need Model_len[4] always.
-%
-% 6. Permit do_term and term_sym to put in newlines (or whatever)
-%    after each record. (See 7 below for example)
-%
-% 7. Add dmap to apply to quals before doing the prevq != q check.
-%    Reason is maybe we're not compressing qualities!  Eg SA:Z: tag
-%    may be best using dmap , = 1 and everything else = 0.  Then
-%    ``chr4,100,5,blah''; becomes delta 000012223456666.  dtab to
-%    divide by 2 then allows it to track token number.
-%    Each semi-colon separated text is a new record (qlen) and they're
-%    joined together with term_sym (6. above).
-%
-% 8. Consider adding selector as context for model len, rev and dup.
-%    This is important on mixed data sets.  Do we want full sel, or
-%    quantised stab[sel]?
-
-The FQZComp quality codec uses an adaptive statistical model to
-predict the next quality value in a given context (comprised of
-previous quality values, position along this sequence, whether the
-sequence is the second in a pair, and a running total of number of
-times the quality has changed in this sequence).
-
-For each quality value, the models produce probabilities for all
-possible next quality values, which are passed into an arithmetic
-entropy encoder to encode or decode the actual next quality value.
-The models are then updated based on the actual next quality in order
-to learn the statistical properties of the quality data stream.  This
-step wise update process is identical for both encoding and decoding.
-
-The algorithm is a generalisation on the original fqzcomp program,
-described in \textit{Compression of FASTQ and SAM Format Sequencing
-  Data} by Bonfield JK, Mahoney MV (2013). PLoS ONE 8(3):
-e59190. \url{https://doi.org/10.1371/journal.pone.0059190}
-
-\subsubsection*{Range coding}
+\subsection*{Range coding}
 
 The range coder is a byte-wise arithmetic coder that operates by
 repeatedly reducing a probability range (for example 0.0 to 1.0) one
@@ -328,7 +280,7 @@ For completeness, the Encoder initialisation and finish functions are below.
 \end{algorithmic}
 
 
-\subsubsection*{Statistical Modelling}
+\subsection*{Statistical Modelling}
 
 The probabilities passed to the range coder may be fixed for all scenarios (as we had in the ``cat'' example), or they may be adaptive and context aware.
 For example the letter `u' occurs around 3\% of time in English text, but if the previous letter was `q' it is close to 100\% and if the previous letter was `u' it is close to 0\%.
@@ -381,19 +333,23 @@ It returns the next symbol and updates the model frequencies automatically.
   \EndIf
   \State $sym \gets S_x$
   \If{$x > 0$ and $F_x > F_{x-1}$}
-    \State $tmp \gets F_x$ \Comment{swap $F_x$ with $F_{x-1}$}
-    \State $F_x \gets F_{x-1}$
-    \State $F_{x-1} \gets tmp$
-    \State $tmp \gets S_x$ \Comment{swap $S_x$ with $S_{x-1}$}
-    \State $S_x \gets S_{x-1}$
-    \State $S_{x-1} \gets tmp$
+    \State \Call{SwapElement}{$F$, $x$, $x-1$} \Comment{swap $F_x$ with $F_{x-1}$}
+    \State \Call{SwapElement}{$S$, $x$, $x-1$} \Comment{swap $S_x$ with $S_{x-1}$}
   \EndIf
   \State \Return $sym$
 \EndFunction
 \end{algorithmic}
 
+\begin{algorithmic}[1]
+\Procedure{SwapElement}{A,i,j}
+    \State $tmp \gets A_i$
+    \State $A_i \gets A_j$
+    \State $A_j \gets A_i$
+\EndProcedure
+\end{algorithmic}
+
 \textsc{ModelRenormalise} is called whenever the total frequencies get too high.
-The frequencies are halved, taking sure to avoid any zeros.
+The frequencies are halved, taking sure to avoid any zero frequencies being created.
 
 \begin{algorithmic}[1]
 \Procedure{ModelRenormalise}{}
@@ -404,6 +360,847 @@ The frequencies are halved, taking sure to avoid any zeros.
   \EndFor
 \EndProcedure
 \end{algorithmic}
+
+\subsubsection*{Order-0 and Order-1 Encoding}
+
+We can combine the model defined above and the range coder to provide a simple function to perform Order-0 entropy decoder.
+
+\begin{algorithmic}[1]
+\Function{DecodeOrder0}{$len$}
+  \State $max\_sym \gets $\Call{ReadByte}{}
+  \State $model\_lit \gets $\Call{ModelCreate}{$max\_sym$}
+  \Statex
+  \For{$i \gets 0$ to $len-1$}
+    \State $out_i \gets model\_lit.$\Call{ModelDecode}{$rc$}
+  \EndFor
+  \State \Return $out$
+\EndFunction
+\end{algorithmic}
+
+The Order-1 variant simply uses an array of models and selects the appropriate model based on the previous value encoded or decoded.
+This array index is our ``context''.
+
+\begin{algorithmic}[1]
+\Function{DecodeOrder1}{$len$}
+  \State $max\_sym \gets $\Call{ReadByte}{}
+  \For{$i \gets 0$ to $max\_sym-1$}
+    \State $model\_lit_i \gets $\Call{ModelCreate}{$max\_sym$}
+  \EndFor
+  \Statex
+  \State $last \gets 0$
+  \For{$i \gets 0$ to $len-1$}
+    \State $out_i \gets model\_lit_{last}.$\Call{ModelDecode}{$rc$}
+    \State $last \gets out_i$
+  \EndFor
+  \State \Return $out$
+\EndFunction
+\end{algorithmic}
+
+\subsubsection*{RLE with Order-0 and Order-1 Encoding}
+
+The \textsc{DecodeOrder0} and \textsc{DecodeOrder1} codecs can be expanded to include a count of how many runs of each symbol should be decoded.
+Both order 0 and order 1 variants are possible.
+
+After the symbol is decoded, the run length must be decoded to
+indicate how many \emph{extra} copies of this symbol occur.  Long runs
+are broken into a series of lengths of no more than 3.  If length 3
+is decoded it indicates we must decode an additional length and add to
+the current one.  The context used for the run length model is the
+symbol itself for the initial run, 256 for the first continuation run
+(if $\ge 4$) and 257 for any further continuation runs.  Thus encoding
+10 `A' characters would first store symbol `A' followed by run length
+3 (with context `A'), length 3 (context 256), length 3 (context
+257), and length 1 (context 258).
+
+For example, if we have the string ``RRRRUNN'' we will decode
+symbol `R' run 3, symbol `U' run 0, symbol `N' run 1.
+
+\begin{algorithmic}[1]
+\Function{DecodeRLE0}{$len$}
+  \State $max\_sym \gets $\Call{ReadByte}{}
+  \If{$max\_sym = 0$}
+    \State $max\_sym \gets 256$
+  \EndIf
+  \State $model\_lit \gets $\Call{ModelCreate}{$max\_sym$}
+
+  \For{$i \gets 0$ to $257$}
+    \State $model\_run_i \gets $\Call{ModelCreate}{$4$}
+  \EndFor
+  \Statex
+  \State $i \gets 0$
+  \While{$i < len$}
+    \State $out_i \gets model\_lit.$\Call{ModelDecode}{$rc$}
+    \State $part \gets model\_run_{out_i}.$\Call{ModelDecode}{$rc$}
+    \State $run \gets part$
+    \State $rctx \gets 256$
+    \While{$part = 3$}
+      \State $part \gets model\_run_{rctx}.$\Call{ModelDecode}{$rc$}
+      \State $rctx \gets 257$
+      \State $run \gets run + part$
+    \EndWhile
+    \For{$j \gets 1$ to $run$}
+      \State $out_{i+j} \gets out_i$
+    \EndFor
+    \State $i \gets run+1$
+  \EndWhile
+  \State \Return $out$
+\EndFunction
+\end{algorithmic}
+
+The order-1 run length variant is identical to order-0 except the
+previous symbol is used as the context for the next literal.  The
+context for the run length does not change.
+
+\begin{algorithmic}[1]
+\Function{DecodeRLE1}{$len$}
+  \State $max\_sym \gets $\Call{ReadByte}{}
+  \For{$i \gets 0$ to $max\_sym-1$}
+    \State $model\_lit_i \gets $\Call{ModelCreate}{$max\_sym$}
+  \EndFor
+  \For{$i \gets 0$ to $257$}
+    \State $model\_run_i \gets $\Call{ModelCreate}{$4$}
+  \EndFor
+  \Statex
+  \State $last \gets 0$
+  \State $i \gets 0$
+  \While{$i < len$}
+    \State $out_i \gets model\_lit_{last}.$\Call{ModelDecode}{$rc$}
+    \State $last \gets out_i$
+    \State $part \gets model\_run_{last}.$\Call{ModelDecode}{$rc$}
+    \State $run \gets part$
+    \State $rctx \gets 256$
+    \While{$part = 3$}
+      \State $part \gets model\_run_{rctx}.$\Call{ModelDecode}{$rc$}
+      \State $rctx \gets 257$
+      \State $run \gets run + part$
+    \EndWhile
+    \For{$j \gets 1$ to $run$}
+      \State $out_{i+j} \gets last$
+    \EndFor
+    \State $i \gets run+1$
+  \EndWhile
+  \State \Return $out$
+\EndFunction
+\end{algorithmic}
+
+\subsection*{General Purpose Entropy Encoder}
+
+We wrap up the Order-0 and 1 entropy encoder, both with and without run length encoding, into a data stream that specifies the type of encoded data and also permits a number of additional transformations to be applied.
+These transformations support bit packing (for example a data block with only 4 distinct values can be packed with 4 values per byte), no-op for tiny data blocks where entropy encoding would grow the data, dictionary lookups for common 4-byte values and 4-way interleaving of the 8-bit components of a 32-bit value.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{|r|r|r|r|p{9cm}|l|}
+\hline
+\multicolumn{2}{|r|}{\textbf{Bits} } & \textbf{Type}  & \textbf{Name} & \multicolumn{2}{p{9cm}|}{\textbf{Description}} \\
+\hline
+\multicolumn{2}{|r|}{8} & uint8 & $flag$ & \multicolumn{2}{p{9cm}|}{Data format bit field}\\
+\cline{1-6}
+
+\multicolumn{6}{|l|}{}\\[-0.3em]
+\multicolumn{6}{|l|}{\textit{Unless \textsc{NoSize} flag is set:} } \\
+\cline{2-5}
+& ? & uint7 & ulen & Uncompressed length & \\
+\cline{2-5}
+
+\multicolumn{6}{|l|}{}\\[-0.3em]
+\multicolumn{6}{|l|}{\textit{If \textsc{X4} flag is set:} } \\
+\cline{2-5}
+& ? & uint7 & clen1 & Compressed sub-block length 1 & \\
+& ? & uint7 & clen2 & Compressed sub-block length 2 & \\
+& ? & uint7 & clen3 & Compressed sub-block length 3 & \\
+& ? & uint7 & clen4 & Compressed sub-block length 4 & \\
+& ? & uint8[] & cdata1 & Compressed data sub-block 1 (recurse) & \\
+& ? & uint8[] & cdata2 & Compressed data sub-block 2 (recurse) & \\
+& ? & uint8[] & cdata3 & Compressed data sub-block 3 (recurse) & \\
+& ? & uint8[] & cdata4 & Compressed data sub-block 4 (recurse) & \\
+\cline{2-5}
+
+\multicolumn{6}{|l|}{}\\[-0.7em]
+\multicolumn{6}{|l|}{\textit{If \textsc{Cat} flag is set (and \textsc{X4} flag is unset):} } \\
+\cline{2-5}
+& ? & uint8[] & udata & Uncompressed data stream & \\
+\cline{2-5}
+
+\multicolumn{6}{|l|}{}\\[-0.3em]
+\multicolumn{6}{|l|}{\textit{If \textsc{Dict} flag is set (and neither \textsc{X4} or \textsc{Cat} flags are set):} } \\
+\cline{2-5}
+& ? & uint8[] & dict\_meta & Dictionary lookup table & \\
+\cline{2-5}
+
+\multicolumn{6}{|l|}{}\\[-0.7em]
+\multicolumn{6}{|l|}{\textit{If \textsc{Pack} flag is set (and neither \textsc{X4} or \textsc{Cat} flags are set):} } \\
+\cline{2-5}
+& ? & uint8[] & pack\_meta & Pack lookup table & \\
+\cline{2-5}
+
+\multicolumn{6}{|l|}{}\\[-0.7em]
+\multicolumn{6}{|l|}{\textit{If neither \textsc{X4} or \textsc{Cat} flags are set:} } \\
+\cline{2-5}
+& ? & uint8[] & cdata & Entropy encoded data stream (see \textsc{Order} / \textsc{RLE} flags) & \\
+\cline{2-5}
+\multicolumn{6}{|l|}{}\\
+\hline
+\end{tabular}
+\end{table}
+
+The first byte of our generalised data stream is a bit-flag detailing the type of transformations and entropy encoders to be combined, followed by optional meta-data, followed by the actual compressed data stream.
+The bit-flags are defined below, but note not all combinations are permitted.
+
+\begin{tabular}{llll}
+\hline
+\textbf{Bit AND value} & \textbf{Code} & \textbf{Description} \\
+\hline
+1 & \textsc{Order} & Order-0 or Order-1 entropy coding. \\
+2 & reserved & Reserved (for possible order-2/3)\\
+4 & \textsc{Dict} & map 32-bit values to 8-bit\\
+8 & \textsc{X4} & 4-way interleaving of byte streams.\\
+16 & \textsc{NoSize} & original size is not recorded (used by X4)\\
+32 & \textsc{Cat} & Data is uncompressed\\
+64 & \textsc{RLE} & Run length encoding, with runs and literals encoded separately\\
+128 & \textsc{Pack} & Pack 2, 4, 8 or infinite symbols per byte.\\
+\hline
+\end{tabular}
+
+Of these X4 is the most complex.
+The uncompressed data must be a multiple of four bytes long.
+Each $4{th}$ byte is sent to its own stream producing 4 interleaved streams, so the $1^{st}$ stream will hold data from byte 0, 4, 8, etc while the $2^{nd}$ stream will hold data from byte 1, 5, 9, etc.
+Each of those four streams is then itself compressed using this compression format.
+For example an input block of small unsigned 32-bit little-endian numbers may use RLE for the first three streams as they are mostly zero, and a non-RLE Order-0 entropy encoder of the last stream.
+Normally our data format will include the decoded size, but with X4 we can omit this from the internal four compressed streams as we know they will each be a quarter of the outer stream.
+
+The data layout differs for each of these bit types, as described below in the \textsc{ArithDecode} function.
+Some of these can be used in combination, so the order needs to be observed.
+The Dict and Pack formats have meta data.
+This is decoded first (dict then pack as appropriate), before entropy decoding and finally expanding any specified pack and dict transformations in that order.
+For example value 193 is indicates a byte stream should be decoded with an RLE aware order-1 entropy encoder and then unpacked.
+
+\begin{algorithmic}[1]
+\Function{ArithDecode}{$len$}
+  \State $flags \gets $\Call{ReadByte}{}
+  \If{$flags \bitand$ \textsc{NoSize} $\ne 0$}
+    \State $out\_len \gets$\Call{ReadInt7}{}
+  \EndIf
+  \If{$flags \bitand$ \textsc{X4}}
+    \State $out \gets $\Call{DecodeX4}{$len$}
+    \Return $out$
+  \EndIf{}
+  \If{$flags \bitand$ \textsc{Cat}}
+    \State $data \gets $\Call{DecodeCat}{}
+  \EndIf
+  \Statex \Comment{Decode meta-data}
+  \If{$flags \bitand$ \textsc{Dict}}
+    \State $D \gets $\Call{DecodeDictMeta}{}
+  \EndIf
+  \If{$flags \bitand$ \textsc{Pack}} \Comment{Swap order of this with Dict for consistency?}
+    \State $P \gets $\Call{DecodePackMeta}{}
+  \EndIf
+  \Statex \Comment{Entropy Decoding}
+  \If{$flags \bitand$ \textsc{RLE}}
+    \If{$flags \bitand$ \textsc{Order}}
+      \State $data \gets $\Call{DecodeRLE1}{}
+    \Else
+      \State $data \gets $\Call{DecodeRLE0}{}
+    \EndIf
+  \Else
+    \If{$flags \bitand$ \textsc{Order}}
+      \State $data \gets $\Call{DecodeOrder1}{}
+    \Else
+      \State $data \gets $\Call{DecodeOrder0}{}
+    \EndIf
+  \EndIf
+  \Statex \Comment{Apply data transformations}
+  \If{$flags \bitand$ \textsc{Pack}}
+    \State $data \gets $\Call{DecodePack}{$data$, $P$}
+  \EndIf
+  \If{$flags \bitand$ \textsc{Dict}}
+    \State $data \gets $\Call{DecodeDict}{$data$, $D$}
+  \EndIf
+  \State $out \gets data$
+  \EndFunction
+\end{algorithmic}
+
+The specifics of each sub-format are described below, in the order (minus meta-data specific shuffling) they are applied.
+
+\begin{itemize}
+\item{\textbf{\textsc{X4}}:}
+The byte stream consists of a 7-bit encoded uncompressed length, which
+must be a multiple of 4, followed by 4 compressed lengths also 7-bit
+encoded.  Each of these compressed byte streams is then itself a valid
+$cdata$ stream and will recurse again, each starting with their own
+format flag.  The total uncompressed byte stream is then an
+interleaving of one byte in turn from each of the 4 substreams (in
+order of 1st to 4th).  Thus an array of 32-bit unsigned integers could
+be unpacked using X4 to compress each of the 8-bit components together
+with their own algorithm.
+
+\begin{algorithmic}[1]
+\Function{DecodeX4}{$len$}
+  % \State $ulen \gets $\Call{ReadInt7}{}
+  \State $plen \gets out\_len / 4$
+  \For{$i \gets 0$ to $3$} \Comment{Fetch 4 compressed lengths}
+    \State $clen_i \gets $\Call{ReadInt7}{}
+  \EndFor
+  \State $X0 \gets $\Call{ArithDecode}{$plen$} \Comment{Decode 4 streams}
+  \State $X1 \gets $\Call{ArithDecode}{$plen$}
+  \State $X2 \gets $\Call{ArithDecode}{$plen$}
+  \State $X3 \gets $\Call{ArithDecode}{$plen$}
+  \Statex
+  \State $i \gets 0$
+  \For{$j \gets 0$ to $plen-1$} \Comment{Interleave}
+    \State $out_{i+0} \gets X0_j$
+    \State $out_{i+1} \gets X1_j$
+    \State $out_{i+2} \gets X2_j$
+    \State $out_{i+3} \gets X3_j$
+    \State $i \gets i+4$
+  \EndFor
+  \State \Return $out$
+\EndFunction
+\end{algorithmic}
+
+\item{\textbf{\textsc{NoSize}}:}
+Do not store the size of the uncompressed data stream.
+This information is not required when the data stream is one of the four sub-streams in the X4 format.
+
+\item{\textbf{\textsc{Cat}}:}
+If present, all other bit flags should be nul, with the possible exception of \textsc{NoSize}.
+
+The uncompressed data stream is the same as the compressed stream.
+This is useful for very short data where the overheads of compressing are too high.
+
+\begin{algorithmic}[1]
+\Function{DecodeCat}{$len$}
+  \For{$i \gets 0$ to $len-1$}
+    \State $out_i \gets $\Call{ReadByte}{}
+  \EndFor
+  \State \Return $out$
+\EndFunction
+\end{algorithmic}
+
+\item{\textbf{\textsc{Order}}:}
+Bit field defining order-0 (unset) or order-1 (set) entropy encoding, as described above by the \textsc{DecodeOrder0} and \textsc{DecodeOrder1} functions.
+
+\item{\textbf{\textsc{RLE}}:}
+Bit field defining whether the Order-0 and Order-1 encoding should also use a run-length.
+When set, the \textsc{DecodeRLE0} and \textsc{DecodeRLE1} functions will be used instead of \textsc{DecodeOrder0} and \textsc{DecodeOrder1}.
+
+\item{\textbf{\textsc{Pack}}:}
+Data containing only 1, 2, 4 or 16 distinct values can have multiple
+values packed into a single byte (infinite, 8, 4 or 2).  The distinct
+symbol values do not need to be adjacent as a mapping table $M$
+converts quantised value $x$ to original symbol $M_x$ where $x$ is the
+number of distinct possible symbols.
+
+The packed format is split into uncompressed meta-data (below) and the compressed packed data.
+
+\begin{table}[h]
+\centering
+% \caption {Meta data format}
+\begin{tabular}{lllp{9cm}}
+\textbf{Bytes} & \textbf{Type} & \textbf{Name} & \textbf{Description}\\
+\hline
+1      & byte   & $nsym$ & Number of distinct symbols\\
+$nsym$ & byte[] & $syms$ & Symbol map
+\end{tabular}
+\end{table}
+
+The first meta-dat byte holds $nsym$, the number of distinct values, followed
+by $nsym$ bytes to construct the $M$ map.  If $nsym = 1$ then the byte
+stream is a stream of constant values and no bit-packing is done (we
+know every value already).  If $nsym = 2$ then each symbol is 1 bit (8
+per byte), if $2 < nsym \le 4$ symbols are 2 bits each (4 per byte)
+and if $4 < nsym \le 16$ symbols are 4 bits each (2 per byte). It is
+not permitted to have $nsym > 16$ as bit packing is not possible.
+Bits are unpacked from low to high.
+
+Decoding this meta-data is implemented by the \textsc{DecodePackMeta} function.
+
+\begin{algorithmic}[1]
+\Function{DecodePackMeta}{$M$, $nsym$}
+  \State $nsym \gets $\Call{ReadByte}{}
+  \For{$i \gets 0$ to $nsym-1$}
+    \State $M_i \gets $ \Call{ReadByte}{}
+  \EndFor
+\EndFunction
+\end{algorithmic}
+
+The meta-data is unpacked at before entropy decoding.
+Once the main data block has been decoded, the byte stream is then expanded with the \textsc{DecodePack} function below.
+
+\begin{algorithmic}[1]
+\Function{DecodePack}{$len$}
+  \If{$nsym <= 1$} \Comment{Constant value}
+    \For{$i \gets 0$ to $len-1$}
+      \State $out_i \gets M_0$
+    \EndFor
+  \Statex
+  \ElsIf{$nsym <= 2$} \Comment{1 bit per value}
+    \For{$i \gets 0$ to $len-1$}
+      \If{$i \bmod 8 = 0$}
+        \State $v \gets$ \Call{ReadByte}{}
+      \EndIf
+      \State $out_i \gets M_{(v \bitand 1)}$
+      \State $v = v >> 1$
+    \EndFor
+  \Statex
+  \ElsIf{$nsym <= 4$} \Comment{2 bits per value}
+    \For{$i \gets 0$ to $len-1$}
+      \If{$i \bmod 4 = 0$}
+        \State $v \gets$ \Call{ReadByte}{}
+      \EndIf
+      \State $out_i \gets M_{(v \bitand 3)}$
+      \State $v = v >> 2$
+    \EndFor
+  \Statex
+  \ElsIf{$nsym <= 16$} \Comment{4 bits per value}
+    \For{$i \gets 0$ to $len-1$}
+      \If{$i \bmod 2 = 0$}
+        \State $v \gets$ \Call{ReadByte}{}
+      \EndIf
+      \State $out_i \gets M_{(v \bitand 15)}$
+      \State $v = v >> 4$
+    \EndFor
+  \Statex
+  \Else
+    \State \Call{Error}{}
+  \EndIf
+  \Statex
+  \State \Return out
+\EndFunction
+\end{algorithmic}
+
+\item{\textbf{\textsc{Dict}}:}
+% Ideally we'd make DICT and PACK external codecs in their own right.
+% Sadly we still need them here too for the name tokeniser, which
+% serialises many small compressed streams together in its own format
+% to avoid overhead.
+
+% FIXME: maybe the whole thing is just an LZ predefined dictionary as a
+% first pass before encoding names?  This permits up to 128 dictionary
+% lookups and intermingling of normal bytes with longer dictionary tokens?
+
+As with \textsc{Pack}, \textsc{Dict} has disjoint uncompressed
+meta-data and compressed data.  The meta-data describes numeric
+dictionary.
+
+If our data consists of a few distinct 32-bit values then compression
+can be gained by using a lookup table and converting these to 8-bit
+values.  We use the term $stride$ to indicate the size of elements in
+the input data (4-byte for 32-bit values).
+
+For example, with values $V = \{0x1234=0,\ 0x1235=1,\ 0x1236=2,\ 0xbeef=3\}$ we can replace this input data stream:
+
+\begin{tikzpicture}
+\newcommand{\x}{0.8cm}
+\draw[-] (0*\x+.5*\x,-0.4) -- (0*\x+.5*\x,+0.4);
+\foreach \w/\i [count=\n] in {
+  3/36, 3/12, 3/0, 0/0,
+  3/35, 3/12, 3/0, 0/0,
+  3/ef, 3/be, 3/0, 0/0,
+  3/36, 3/12, 3/0, 0/0,
+  3/34, 3/12, 3/0, 0/0} {
+    \draw[-] (\n*\x+.5*\x,-0.4)  -- (\n*\x+.5*\x,-\w/10);
+    \draw[-] (\n*\x+.5*\x,\w/10) -- (\n*\x+.5*\x, 0.4);
+    \draw[-] (\n*\x-.5*\x,-0.4)  -- (\n*\x+.5*\x,-0.4);
+    \draw[-] (\n*\x-.5*\x, 0.4)  -- (\n*\x+.5*\x, 0.4);
+    \node[minimum height=1cm,minimum width=\x,xshift=\n*\x,font=\ttfamily](N\n){\i};
+}
+\end{tikzpicture}
+
+with a copy of map $V$ (see below for format) and a new data byte-stream:
+
+\begin{tikzpicture}
+\newcommand{\x}{0.8cm}
+\draw[-] (0*\x+.5*\x,-0.4) -- (0*\x+.5*\x,+0.4);
+\foreach \w/\i [count=\n] in {0/2, 0/1, 0/3, 0/2, 0/0} {
+    \draw[-] (\n*\x+.5*\x,-0.4)  -- (\n*\x+.5*\x,-\w/10);
+    \draw[-] (\n*\x+.5*\x,\w/10) -- (\n*\x+.5*\x, 0.4);
+    \draw[-] (\n*\x-.5*\x,-0.4)  -- (\n*\x+.5*\x,-0.4);
+    \draw[-] (\n*\x-.5*\x, 0.4)  -- (\n*\x+.5*\x, 0.4);
+    \node[minimum height=1cm,minimum width=\x,xshift=\n*\x,font=\ttfamily](N\n){\i};
+}
+\end{tikzpicture}
+
+Here we describe the reversal of this; the dictionary decoding method.
+In the example above our elements of $V$ were all 2-bytes long
+(16-bit).  Currently the \textsc{Dict} format is restricted to a
+$stride$ of 4 and element size 2.
+The map format itself is described in a meta-data block:
+
+\begin{table}[h]
+\centering
+% \caption {Meta data format}
+\begin{tabular}{lllp{9cm}}
+\textbf{Bytes} & \textbf{Type} & \textbf{Name} & \textbf{Description}\\
+\hline
+\sfrac{1}{2}    & nibble(high) & $v$ & Size in bytes for each value in dictionary $V$ (must be 2)\\
+\sfrac{1}{2}    & nibble(low)  & $s$ & Stride size in bytes for output (must be 4)\\
+1               & byte         & $n$ & Number of items in dictionary\\
+?               & byte[]       & $V$ & Dictionary of $n$ $v$-byte values\\
+\end{tabular}
+\end{table}
+
+
+The first byte indicates the multi-byte stride
+size $s$ to map in the low 4 bits and the size $v$ of the multi-byte
+values in the top 4 bits, where $s \ge v$.
+Currently these must be 4 and 2 respectively.
+
+The next byte holds the number of values $n$ in the map $V$. Following
+this is a run-length encoding of the map.  The meta-data stream
+consists of a byte holding the number of literals in a row in the top
+4 bits and the subsequent number of runs of consecutive literals in a
+row in the bottom 4 bits.  For each literal, the next $v$ bytes
+(little endian) represent the value.
+
+During decode, these literals will be expressed as $s$-byte little
+endian values.  For each run the value is numerically one higher than
+before and is not stored.
+
+For example $V = \{1000,1100,1200,1201,1202,1203,1204,2200\}$ is stored in the meta-data stream as:
+
+\begin{tikzpicture}
+\draw[-] (0*1cm+.5cm,-0.4) -- (0*1cm+.5cm,+0.4);
+\foreach \w/\i [count=\n] in {0/24, 0/08, 0/43, 3/e8, 0/03, 3/4c, 0/04, 3/b0, 0/04, 0/01, 3/98, 0/08} {
+    \draw[-] (\n*1cm+.5cm,-0.4) -- (\n*1cm+.5cm,-\w/10);
+    \draw[-] (\n*1cm+.5cm,\w/10) -- (\n*1cm+.5cm,0.4);
+    \draw[-] (\n*1cm-.5cm,-0.4) -- (\n*1cm+.5cm,-0.4);
+    \draw[-] (\n*1cm-.5cm, 0.4) -- (\n*1cm+.5cm, 0.4);
+    \node[minimum height=1cm,minimum width=1cm,xshift=\n*1cm,font=\ttfamily](N\n){\i};
+}
+
+\node[below=0pt, xshift=0.5cm] at (N1.south west) {$v\ 2$};
+\node[below=10pt,xshift=0.5cm] at (N1.south west) {$s\ 4$};
+
+\node[below=0pt, xshift=0.5cm] at (N2.south west) {$n$};
+
+\node[below=0pt, xshift=0.5cm] at (N3.south west) {$run\ 4$};
+\node[below=10pt,xshift=0.5cm] at (N3.south west) {$lit\ 3$};
+
+\node[below=1pt, xshift=1cm]   at (N4.south west) {$1000$};
+\node[below=1pt, xshift=1cm]   at (N6.south west) {$1100$};
+\node[below=1pt, xshift=1cm]   at (N8.south west) {$1200$};
+
+\node[below=0pt, xshift=0.5cm] at (N10.south west) {$run\ 0$};
+\node[below=10pt,xshift=0.5cm] at (N10.south west) {$lit\ 1$};
+
+\node[below=1pt, xshift=1cm]   at (N11.south west) {$2200$};
+\end{tikzpicture}
+
+\vskip 10pt
+
+\begin{algorithmic}[1]
+\Function{DecodeDictMeta}{$len$}
+  \State $sv \gets $\Call{ReadByte}{}
+  \State $stride \gets sv \bmod 16$ \Comment{Currently must be 4}
+  \State $vsize \gets sv \bdiv 16$ \Comment{Currently must be 2}
+  \State $n \gets $\Call{ReadByte}{}
+  \State $i \gets 0$
+  \While{$i < n$}
+    \State $x \gets $\Call{ReadByte}{}
+    \State $lit \gets x \bmod 16$
+    \State $run \gets x \bdiv 16$
+    \For{$j \gets 0$ to $lit-1$}
+      \State $D_{i+j} \gets $\Call{ReadInt16}{} \Comment{For $vsize = 2$}
+    \EndFor
+    \State $i \gets i + lit$
+    \If{$run > 0$}
+      \For{$j \gets 0$ to $run-1$}
+        \State $D_{i+j} \gets D_{i+j-1}+1$
+      \EndFor
+      \State $i \gets i + run$
+    \EndIf
+  \EndWhile
+  \State \Return $D,\ stride$
+\EndFunction
+\end{algorithmic}
+
+The compressed data stream follows (either immediately after this or
+following the \textsc{Pack} meta-data), encoded according to the other
+format bit flags. Once the bytes have been uncompressed a new data
+stream is generated by replacing each byte value $x$ with the unsigned
+$v$-byte value $V_x$, thus growing the byte stream by $v$ times.
+
+\begin{algorithmic}[1]
+\Function{DecodeDict}{$data,\ out\_len$} \Comment{Only for $stride = 4$}
+  \State $i \gets 0$
+  \For{$j \gets 0$ to $out\_len-1$}
+  \State $v \gets data_j$
+  \State $out_{i+0} \gets (D_v >> \ 0) \bitand 255$
+  \State $out_{i+1} \gets (D_v >> \ 8) \bitand 255$
+  \State $out_{i+2} \gets (D_v >> 16) \bitand 255$
+  \State $out_{i+3} \gets (D_v >> 24) \bitand 255$
+  \State $i \gets i + 4$
+ \EndFor
+  \State \Return $out$
+\EndFunction
+\end{algorithmic}
+
+\end{itemize}
+
+\subsection*{Name tokenisation codec}
+
+Sequence names (identifiers) typically follow a structured pattern and compression based on columns within those structures usually leads to smaller sizes.
+
+As an example, take a series of names:
+
+\begin{verbatim}
+I17_08765:2:123:61541:01763#9
+I17_08765:2:123:1636:08611#9
+I17_08765:2:124:45613:16161#9
+\end{verbatim}
+
+We may wish to tokenise each of these into 7 tokens, e.g.
+``I17\_08765:2:'', ``123'', ``:'', ``61541'', ``:'', ``01763''and
+``\#9''. Some of these are multi-byte strings, some single characters,
+and some numeric, possibily with a leading zero.  We also observe some
+regularly have values that match the previous line (the initial prefix
+string, colons, ``\#9'') while others are numerically very close to the
+value in the previous line (124 vs 123).
+
+The name tokeniser compares each name against a previous name (which
+is not necessarily the one immediately prior) and encodes this name
+either as a series of differences to the previous name or marking it
+as an exact duplicate.  A maximum of 128 tokens is permitted within
+any single read name.
+
+The tokens and values are stored in an array $T_{pos,type}$ of byte
+streams, where pos 0 is reserved for name meta-data (whether a
+duplicate name) and pos 1 onwards is for the first, second and later
+tokens.  $Type$ is one of the token types listed below, corresponding
+to the type of data being stored.  Some token types may also have
+associated values.  Type TYPE (0) holds the token type itself and that
+type is then used to retrieve the associated value(s) if appropriate.
+Thus multiple types at the same token position will have their values
+encoded in distinct data streams, e.g. is position 5 is of type either
+DIGITS or DDELTA then data streams will exist for $T_{5,TYPE}$,
+$T_{5,DIGITS}$ and $T_{5, DDELTA}$.  Decoding per name continues until
+a token of type END is observed.
+
+The sequence name (identifier) tokenisation relies heavily on the General Purpose Entropy Encoder described above.
+
+A simplistic pseudocode for decoding the $n^{th}$ individual name is:
+
+\begin{algorithmic}[1]
+  \Function{DecodeName}{$n$}
+  \State $type \gets$ \Call{get\_type}{0,\ \texttt{TYPE}}
+  \State $dist \gets$ \Call{get\_int32}{0,\ \texttt{TYPE}}
+  \If{$type = $ \texttt{DUP}}
+    \State $name_n \gets name_{n-dist}$
+    \State \Return $name_n$
+  \EndIf
+  \Statex
+  \State $pos \gets 0$
+  \Repeat
+    \State $pos \gets pos+1$
+    \State $type \gets$ \Call{get\_type}{$pos$,\ \texttt{TYPE}}
+    \State (Append to $name_n$ based on $type$)
+  \Until{$type = $ \texttt{END}}
+  \State \Return $name_n$
+  \EndFunction
+\end{algorithmic}
+
+
+Token IDs (types) are listed below.
+
+\begin{tabular}{lllp{10cm}}
+\hline
+\textbf{ID} & \textbf{Type} & \textbf{Value} & \textbf{Description}\\
+\hline
+ 0 & TYPE    & Type    & Used to determine the type of token at a given position. \\
+\hline
+ 5 & DUP     & Integer (distance) & The entire name is a duplicate of an earlier one.  Used in position 0 only.\\
+ 6 & DIFF    & Integer (distance) & The entire name is differs to earlier ones.  Used in position 0 only.\\
+\hline
+ 1 & STRING  & String  & A string of characters \\
+ 2 & CHAR    & Byte    & A single character \\
+ 7 & DIGITS  & $0 \le$ Int $< 2^{32}$ & A numerical value, not containing a leadng zero \\
+ 4 & DIGITS0 & $0 \le$ Int $< 2^{32}$ & A numerical value possibly starting in leading zeros \\
+ ? & DZLEN   & Int length & Length of DIGITS0 token.\\
+11 & DDELTA  & $0 \le$ Int $< 256$   & A numeric value being stored as the difference to the value of this token on the previous name \\
+12 & DDELTA0 & $0 \le$ Int $< 256$ & As DDELTA, but for numeric values starting with leading zeros \\
+13 & MATCH   & (none) & This token is identical type and value to the same position in the previous name \\
+14 & END     & (none) & Marks end of name\\
+\hline
+\end{tabular}
+
+More detail on the token types is given below.
+
+\begin{itemize}
+\item{\textbf{TYPE}:}
+This is the first token fetched at each token position.  It holds the
+type of the token at this position, which in turn may then required
+retrieval from type-specific data streams at this position.
+
+For position 0, the TYPE field indicates whether this record is an
+exact duplicate of a prior read name or has been encoded as a delta to
+an earlier one.
+
+\item{\textbf{DUP}, \textbf{DIFF}:}
+These types are fetched for position 0, at the start of each new
+identifier.  The value is an integer value describing how many reads
+before this (with 1 being the immediately previous name) we are
+comparing against.  When we refer to ``previous name'' below, we
+always mean the one indicated by the DIFF field and not the one
+immediately prior to the current name.
+
+By convention the first record will have a DIFF of zero and no delta
+or match operations are permitted.
+
+\item{\textbf{STRING}:}
+We fetch one byte at a time from the value array, appending to the
+name buffer until the byte retrieved is zero.  The zero byte is not
+stored in the name buffer.
+For purposes of token type MATCH, a match is defined as entirely
+matching the string including the length.
+
+\item{\textbf{CHAR}:}
+Fetch one single byte from the value array and append to the name buffer.
+
+\item{\textbf{DIGITS}:}
+Fetch 4 bytes from the value array and intrepret these as a little
+endian unsigned integer.  This is appended to the name buffer as
+string of base-10 digits, most significant digit first.  Larger
+values may be represented, but will require multiple DIGITS tokens.
+Negative values may be encoded by treating the minus sign as a CHAR or
+STRING and storing the absolute value.
+
+\item{\textbf{DIGITS0}, \textbf{DZLEN}:}
+This fetches the 4 bytes value from $T_{pos,DIGITS0}$ and a 1 byte
+length from $T_{pos,DZLEN}$.  As per DIGITS, the value is intrepreted as a
+little endian unsigned integer.  The length indicates the total
+size of the numeric value when displayed in base 10 which must be
+greater than $\log_{10}(value)$ with any remaining length indicating
+the number of leading zeros.  For example if DIGITS0 value is 123 and
+DZLEN length is 5 the string ``00123'' must be appended to the name.
+
+For purposes of the MATCH type, both primary and secondary lengths
+must match.
+
+\item{\textbf{DDELTA}:}
+Fetch a 1 byte value and add this to the DIGITS value from the
+previous name.  It is invalid to have a DDELTA token when the previous
+name does not have a DIGITS token at this position.
+
+For the purposes of a MATCH type, the DDELTA value is assumed to match
+meaning we have another increment by the same amount.
+
+\item{\textbf{DDELTA0}:}
+As per DDELTA, but the 1 byte value retrieved is added to the DIGITS0
+value in the previous name.  No DZLEN value is retrieved, with the
+length from the previous name being used instead.
+
+For the purposes of a MATCH type, the DDELTA0 value is assumed to match
+meaning we have another increment by the same amount and display to
+the same length.
+
+\item{\textbf{MATCH}:}
+This token matches the token at the same position in the previous
+name.  (The previous name is permitted to also have a MATCH token at
+this position, in which case it recurses to its previous name.)
+
+The definition of MATCH is token type specific, as described above.
+No value is needed for MATCH tokens.
+
+\item{\textbf{END}:}
+Marks the end of the name.  A nul byte is added to the name output
+buffer.  No value is needed for END tokens.
+\end{itemize}
+
+Given a complex name and both position and type specific values, this
+can lead to many separate data streams.  These are serialised into
+a single byte stream.
+
+The packed data stream starts with two unsigned little endiand 32-bit
+integers holding the total size of uncompressed name buffer and the
+number of read names.  This is followed the array elements
+themselves.
+
+Token types, $ttype$ holds one of the token ID values listed above
+in the list above, plus special values to indicate certain additional
+flags.  Bit 6 (64) set indicates that this entire token data stream is a
+duplicate of one earlier.  Bit 7 (128) set indicates the token
+is the first token at a new position.
+
+The total size of the serialised stream needs to be already known, in
+order to determine when the token types finish.
+
+\begin{tabular}{|r|r|r|l|l|p{10cm}|}
+\hline
+\multicolumn{3}{|r|}{\textbf{Bytes}} & \textbf{Type} & \textbf{Name} & \textbf{Description}\\
+\hline
+\multicolumn{3}{|r|}{4} & uint32 & $uncomp\_length$ & Length of uncompressed name buffer\\
+\multicolumn{3}{|r|}{4} & uint32 & $num\_reads$ & Number of read names\\
+\hline
+\multicolumn{6}{|l|}{\quad\textit{For each token data stream}}\\
+\cline{2-6}
+& \multicolumn{2}{r|}{1} & uint8 & $ttype$ & Token type code.\\
+\cline{2-6}
+& \multicolumn{5}{l|}{\textit{If ttype AND 64 (duplicate)}}\\
+\cline{3-6}
+& & 1 & uint8 & $dup\_pos$  & Duplicate from this token position\\
+& & 1 & uint8 & $dup\_type$ & Duplicate from this token type ID\\
+\cline{3-6}
+& \multicolumn{5}{l|}{\textit{else if not duplicate}}\\
+\cline{3-6}
+& & ? & i7 & $clen$ & compressed length (7-bit encoding)\\
+& & $clen$ & $cdata$ & stream & compressed data stream\\
+\hline
+\end{tabular}
+
+TODO: write simple pseudocode for this stage.
+
+The $cdata$ stream itself is as described in the General Purpose Entropy Encoder section above, with the \textsc{ArithDecode} function.
+
+\subsection*{FQZComp quality codec}
+
+% Ideas to explore and TODO list:
+%
+% 1. Move param do_rev to global part.  It's all or nothing
+%
+% 2. Delta updates immediately on base 0 to base 1.  Maybe delay
+%    initialisation so prevq is 1st base qual.
+%
+% 3. ReadArray pseudocode needs fixing.
+%
+% 4. Add param sel_offset to subtract from decoded sel.
+%    Eg if we have 2 params and max_sel 3 (0..3) then we may want
+%    sel 0/1 for 1st param and sel 0/1 (sel_offset 2) for 2nd?
+%
+% 5. Add len_bytes to param so we don't need Model_len[4] always.
+%
+% 6. Permit do_term and term_sym to put in newlines (or whatever)
+%    after each record. (See 7 below for example)
+%
+% 7. Add dmap to apply to quals before doing the prevq != q check.
+%    Reason is maybe we're not compressing qualities!  Eg SA:Z: tag
+%    may be best using dmap , = 1 and everything else = 0.  Then
+%    ``chr4,100,5,blah''; becomes delta 000012223456666.  dtab to
+%    divide by 2 then allows it to track token number.
+%    Each semi-colon separated text is a new record (qlen) and they're
+%    joined together with term_sym (6. above).
+%
+% 8. Consider adding selector as context for model len, rev and dup.
+%    This is important on mixed data sets.  Do we want full sel, or
+%    quantised stab[sel]?
+
+The FQZComp quality codec uses an adaptive statistical model to
+predict the next quality value in a given context (comprised of
+previous quality values, position along this sequence, whether the
+sequence is the second in a pair, and a running total of number of
+times the quality has changed in this sequence).
+
+For each quality value, the models produce probabilities for all
+possible next quality values, which are passed into an arithmetic
+entropy encoder to encode or decode the actual next quality value.
+The models are then updated based on the actual next quality in order
+to learn the statistical properties of the quality data stream.  This
+step wise update process is identical for both encoding and decoding.
+
+The algorithm is a generalisation on the original fqzcomp program,
+described in \textit{Compression of FASTQ and SAM Format Sequencing
+  Data} by Bonfield JK, Mahoney MV (2013). PLoS ONE 8(3):
+e59190. \url{https://doi.org/10.1371/journal.pone.0059190}
 
 \subsubsection*{FQZComp Models}
 
@@ -987,615 +1784,6 @@ reverse them first.  If so $do\_rev$ will be set and the
 \end{algorithmic}
 
 
-\subsection*{Name tokenisation codec}
 
-Sequence names (identifiers) typically follow a structured pattern and
-compression based on columns within those structures usually leads to
-smaller sizes.
-
-As an example, take a series of names:
-
-\begin{verbatim}
-I17_08765:2:123:61541:01763#9
-I17_08765:2:123:1636:08611#9
-I17_08765:2:124:45613:16161#9
-\end{verbatim}
-
-We may wish to tokenise each of these into 7 tokens, e.g.
-``I17\_08765:2:'', ``123'', ``:'', ``61541'', ``:'', ``01763''and
-``\#9''. Some of these are multi-byte strings, some single characters,
-and some numeric, possibily with a leading zero.  We also observe some
-regularly have values that match the previous line (the initial prefix
-string, colons, ``\#9'') while others are numerically very close to the
-value in the previous line (124 vs 123).
-
-The name tokeniser compares each name against a previous name (which
-is not necessarily the one immediately prior) and encodes this name
-either as a series of differences to the previous name or marking it
-as an exact duplicate.  A maximum of 128 tokens is permitted within
-any single read name.
-
-The tokens and values are stored in an array $T_{pos,type}$ of byte
-streams, where pos 0 is reserved for name meta-data (whether a
-duplicate name) and pos 1 onwards is for the first, second and later
-tokens.  $Type$ is one of the token types listed below, corresponding
-to the type of data being stored.  Some token types may also have
-associated values.  Type TYPE (0) holds the token type itself and that
-type is then used to retrieve the associated value(s) if appropriate.
-Thus multiple types at the same token position will have their values
-encoded in distinct data streams, e.g. is position 5 is of type either
-DIGITS or DDELTA then data streams will exist for $T_{5,TYPE}$,
-$T_{5,DIGITS}$ and $T_{5, DDELTA}$.  Decoding per name continues until
-a token of type END is observed.
-
-A simplistic pseudocode for decoding the $n^{th}$ individual name is:
-
-\begin{algorithmic}[1]
-  \Function{DecodeName}{$n$}
-  \State $type \gets$ \Call{get\_type}{0,\ \texttt{TYPE}}
-  \State $dist \gets$ \Call{get\_int32}{0,\ \texttt{TYPE}}
-  \If{$type = $ \texttt{DUP}}
-    \State $name_n \gets name_{n-dist}$
-    \State \Return $name_n$
-  \EndIf
-  \Statex
-  \State $pos \gets 0$
-  \Repeat
-    \State $pos \gets pos+1$
-    \State $type \gets$ \Call{get\_type}{$pos$,\ \texttt{TYPE}}
-    \State (Append to $name_n$ based on $type$)
-  \Until{$type = $ \texttt{END}}
-  \State \Return $name_n$
-  \EndFunction
-\end{algorithmic}
-
-
-Token IDs (types) are listed below.
-
-\begin{tabular}{lllp{10cm}}
-\hline
-\textbf{ID} & \textbf{Type} & \textbf{Value} & \textbf{Description}\\
-\hline
- 0 & TYPE    & Type    & Used to determine the type of token at a given position. \\
-\hline
- 5 & DUP     & Integer (distance) & The entire name is a duplicate of an earlier one.  Used in position 0 only.\\
- 6 & DIFF    & Integer (distance) & The entire name is differs to earlier ones.  Used in position 0 only.\\
-\hline
- 1 & STRING  & String  & A string of characters \\
- 2 & CHAR    & Byte    & A single character \\
- 7 & DIGITS  & $0 \le$ Int $< 2^{32}$ & A numerical value, not containing a leadng zero \\
- 4 & DIGITS0 & $0 \le$ Int $< 2^{32}$ & A numerical value possibly starting in leading zeros \\
- ? & DZLEN   & Int length & Length of DIGITS0 token.\\
-11 & DDELTA  & $0 \le$ Int $< 256$   & A numeric value being stored as the difference to the value of this token on the previous name \\
-12 & DDELTA0 & $0 \le$ Int $< 256$ & As DDELTA, but for numeric values starting with leading zeros \\
-13 & MATCH   & (none) & This token is identical type and value to the same position in the previous name \\
-14 & END     & (none) & Marks end of name\\
-\hline
-\end{tabular}
-
-More detail on the token types is given below.
-
-\begin{itemize}
-\item{\textbf{TYPE}:}
-This is the first token fetched at each token position.  It holds the
-type of the token at this position, which in turn may then required
-retrieval from type-specific data streams at this position.
-
-For position 0, the TYPE field indicates whether this record is an
-exact duplicate of a prior read name or has been encoded as a delta to
-an earlier one.
-
-\item{\textbf{DUP}, \textbf{DIFF}:}
-These types are fetched for position 0, at the start of each new
-identifier.  The value is an integer value describing how many reads
-before this (with 1 being the immediately previous name) we are
-comparing against.  When we refer to ``previous name'' below, we
-always mean the one indicated by the DIFF field and not the one
-immediately prior to the current name.
-
-By convention the first record will have a DIFF of zero and no delta
-or match operations are permitted.
-
-\item{\textbf{STRING}:}
-We fetch one byte at a time from the value array, appending to the
-name buffer until the byte retrieved is zero.  The zero byte is not
-stored in the name buffer.
-For purposes of token type MATCH, a match is defined as entirely
-matching the string including the length.
-
-\item{\textbf{CHAR}:}
-Fetch one single byte from the value array and append to the name buffer.
-
-\item{\textbf{DIGITS}:}
-Fetch 4 bytes from the value array and intrepret these as a little
-endian unsigned integer.  This is appended to the name buffer as
-string of base-10 digits, most significant digit first.  Larger
-values may be represented, but will require multiple DIGITS tokens.
-Negative values may be encoded by treating the minus sign as a CHAR or
-STRING and storing the absolute value.
-
-\item{\textbf{DIGITS0}, \textbf{DZLEN}:}
-This fetches the 4 bytes value from $T_{pos,DIGITS0}$ and a 1 byte
-length from $T_{pos,DZLEN}$.  As per DIGITS, the value is intrepreted as a
-little endian unsigned integer.  The length indicates the total
-size of the numeric value when displayed in base 10 which must be
-greater than $\log_{10}(value)$ with any remaining length indicating
-the number of leading zeros.  For example if DIGITS0 value is 123 and
-DZLEN length is 5 the string ``00123'' must be appended to the name.
-
-For purposes of the MATCH type, both primary and secondary lengths
-must match.
-
-\item{\textbf{DDELTA}:}
-Fetch a 1 byte value and add this to the DIGITS value from the
-previous name.  It is invalid to have a DDELTA token when the previous
-name does not have a DIGITS token at this position.
-
-For the purposes of a MATCH type, the DDELTA value is assumed to match
-meaning we have another increment by the same amount.
-
-\item{\textbf{DDELTA0}:}
-As per DDELTA, but the 1 byte value retrieved is added to the DIGITS0
-value in the previous name.  No DZLEN value is retrieved, with the
-length from the previous name being used instead.
-
-For the purposes of a MATCH type, the DDELTA0 value is assumed to match
-meaning we have another increment by the same amount and display to
-the same length.
-
-\item{\textbf{MATCH}:}
-This token matches the token at the same position in the previous
-name.  (The previous name is permitted to also have a MATCH token at
-this position, in which case it recurses to its previous name.)
-
-The definition of MATCH is token type specific, as described above.
-No value is needed for MATCH tokens.
-
-\item{\textbf{END}:}
-Marks the end of the name.  A nul byte is added to the name output
-buffer.  No value is needed for END tokens.
-\end{itemize}
-
-Given a complex name and both position and type specific values, this
-can lead to many separate data streams.  These are serialised into
-a single byte stream.
-
-The packed data stream starts with two unsigned little endiand 32-bit
-integers holding the total size of uncompressed name buffer and the
-number of read names.  This is followed the array elements
-themselves.
-
-Token types, $ttype$ holds one of the token ID values listed above
-in the list above, plus special values to indicate certain additional
-flags.  Bit 6 (64) set indicates that this entire token data stream is a
-duplicate of one earlier.  Bit 7 (128) set indicates the token
-is the first token at a new position.
-
-The total size of the serialised stream needs to be already known, in
-order to determine when the token types finish.
-
-\begin{tabular}{|r|r|r|l|l|p{10cm}|}
-\hline
-\multicolumn{3}{|r|}{\textbf{Bytes}} & \textbf{Type} & \textbf{Name} & \textbf{Description}\\
-\hline
-\multicolumn{3}{|r|}{4} & uint32 & $uncomp\_length$ & Length of uncompressed name buffer\\
-\multicolumn{3}{|r|}{4} & uint32 & $num\_reads$ & Number of read names\\
-\hline
-\multicolumn{6}{|l|}{\quad\textit{For each token data stream}}\\
-\cline{2-6}
-& \multicolumn{2}{r|}{1} & uint8 & $ttype$ & Token type code.\\
-\cline{2-6}
-& \multicolumn{5}{l|}{\textit{If ttype AND 64 (duplicate)}}\\
-\cline{3-6}
-& & 1 & uint8 & $dup\_pos$  & Duplicate from this token position\\
-& & 1 & uint8 & $dup\_type$ & Duplicate from this token type ID\\
-\cline{3-6}
-& \multicolumn{5}{l|}{\textit{else if not duplicate}}\\
-\cline{3-6}
-& & ? & i7 & $clen$ & compressed length (7-bit encoding)\\
-& & $clen$ & $cdata$ & stream & compressed data stream\\
-\hline
-\end{tabular}
-
-TODO: write simple pseudocode for this stage.
-
-The $cdata$ stream itself can be compressed using a variety of
-methods.  The first byte is a format flag with a series of method bits:
-
-\begin{tabular}{llll}
-\hline
-\textbf{Bit number} & \textbf{Bit AND value} & \textbf{Code} & \textbf{Description} \\
-\hline
-0 & 1 & ORDER & Order-0 or Order-1 entropy coding. \\
-1 & 2 & reserved & Reserved (for possible order-2/3)\\
-2 & 4 & DICT & map 32-bit values to 8-bit\\
-3 & 8 & X4 & 4-way interleaving of byte streams.\\
-4 & 16 & NOSIZE & original size is not recorded (used by X4)\\
-5 & 32 & CAT & Data is uncompressed\\
-6 & 64 & RLE & Run length encoding, with runs and literals encoded separately\\
-7 & 128 & PACK & Pack 2, 4, 8 or infinite symbols per byte.\\
-\hline
-\end{tabular}
-
-The data layout differs for each of these bit types, as described
-below.  Some of these can be used in combination, so the order needs
-to be observed.  The order of evaluation is (TODO).  For example value
-193 is PACK, then RLE, then Order-1 entropy encoding.
-
-\begin{algorithmic}[1]
-\Function{ArithDecode}{$len$}
-  \State $flags \gets $\Call{ReadByte}{}
-  \If{$flags \bitand 8$} \Comment{X4}
-    \State $out \gets $\Call{DecodeX4}{$len$}
-    \Return $out$
-  \EndIf{}
-  \Statex
-  \If{$flags \bitand 16 \ne 0$} \Comment{not NO\_SIZE}
-    \State $out\_len \gets$\Call{ReadInt7}{}
-  \EndIf
-  \If{$flags \bitand 4$} \Comment{DICT}
-    \State $D \gets $\Call{DecodeDictMeta}{}
-  \EndIf
-  \If{$flags \bitand 128$} \Comment{PACK}
-    \State $P \gets $\Call{DecodePackMeta}{}
-  \EndIf
-  \If{$flags \bitand 32$} \Comment{CAT}
-    \State $data \gets $\Call{DecodeCat}{}
-  \EndIf
-  \If{$flags \bitand 64$} \Comment{RLE}
-    \If{$flags \bitand 1$} \Comment{ORDER}
-      \State $data \gets $\Call{DecodeRLE1}{}
-    \Else
-      \State $data \gets $\Call{DecodeRLE0}{}
-    \EndIf
-  \EndIf
-  \If{$flags \bitand 128$} \Comment{PACK}
-    \State $data \gets $\Call{DecodePack}{$data$}
-  \EndIf
-  \State $out \gets data$
-  \EndFunction
-\end{algorithmic}
-
-\begin{itemize}
-\item{\textbf{ORDER}:}
-Defines order-0 or order-1 entropy encoding, as used by the arithmetic
-coder described in the Statistical Modelling section.
-
-\begin{algorithmic}[1]
-\Function{DecodeOrder0}{$len$}
-  \State $max\_sym \gets $\Call{ReadByte}{}
-  \State $model\_lit \gets $\Call{ModelCreate}{$max\_sym$}
-  \Statex
-  \For{$i \gets 0$ to $len-1$}
-    \State $out_i \gets model\_lit.$\Call{ModelDecode}{$rc$}
-  \EndFor
-  \State \Return $out$
-\EndFunction
-\end{algorithmic}
-
-\begin{algorithmic}[1]
-\Function{DecodeOrder1}{$len$}
-  \State $max\_sym \gets $\Call{ReadByte}{}
-  \For{$i \gets 0$ to $max\_sym-1$}
-    \State $model\_lit_i \gets $\Call{ModelCreate}{$max\_sym$}
-  \EndFor
-  \Statex
-  \State $last \gets 0$
-  \For{$i \gets 0$ to $len-1$}
-    \State $out_i \gets model\_lit_{last}.$\Call{ModelDecode}{$rc$}
-    \State $last \gets out_i$
-  \EndFor
-  \State \Return $out$
-\EndFunction
-\end{algorithmic}
-
-\item{\textbf{DICT}:}
-FIXME: we have expanded size 4 mandated, but only store them as 16-bit
-values with a 16-to-32 expansion explicitly coded into the algorithm.
-We should generalise this, as well as doing it correctly! Maybe
-high-4-bit is stride size and low-4-bit is stored size, to permit
-future improvements?
-
-FIXME: maybe the whole thing is just an LZ predefined dictionary as a
-first pass before encoding names?  This permits up to 128 dictionary
-lookups and intermingling of normal bytes with longer dictionary tokens?
-
-This maps fixed size multi-byte values $V_n$ to single-byte values
-$\{0, 1, ... n-1\}$.  The first byte indicates the multi-byte stride
-size to map.  Currently this must be 4.  The next byte holds the
-number of values in the map ($n$). Following this is a run-length
-encoding of the map.  The byte-stream consists of a byte holding the
-number of literals in a row in the top 4 bits and the number of runs
-of consecutive literals in a row in the bottom 4 bits.  For each
-literal, the next 16-bits (little endian) represent the value.
-Despite this only being 16 bit in size, it is expanded to a 32-bit
-number (with 16-bit of leading zeros) in the uncompressed byte stream.
-For each run the value is numerically one higher than before and is
-not stored.  For example $V_n =
-\{1000,1100,1200,1201,1202,1203,1204,2200\}$ could be stored as
-$\{(3<<4)+4, \textit{1000}, \textit{1100}, \textit{1200}, (1<<4)+0, \textit{2200}\}$ with the actual
-values shown in italics taking up 16-bits each.
-
-The compressed data stream follows, encoded according to the other
-format bit flags. Once the bytes have been uncompressed a new data
-stream is generated by replacing each byte value $x$ with the unsigned
-32-bit value $V_x$, thus growing the byte stream by 4 times.
-
-\begin{algorithmic}[1]
-\Function{DecodeDictMeta}{$len$}
-  \State $stride \gets $\Call{ReadByte}{}
-  \State $n \gets $\Call{ReadByte}{}
-  \State $i \gets 0$
-  \While{$i < n$}
-    \State $x \gets $\Call{ReadByte}{}
-    \State $lit \gets x \bmod 16$
-    \State $run \gets x \bdiv 16$
-    \For{$j \gets 0$ to $lit-1$}
-      \State $D_{i+j} \gets $\Call{ReadInt16}{}
-    \EndFor
-    \State $i \gets i + lit$
-    \If{$run > 0$}
-      \For{$j \gets 0$ to $run-1$}
-        \State $D_{i+j} \gets D_{i+j-1}+1$
-      \EndFor
-      \State $i \gets i + run$
-    \EndIf
-  \EndWhile
-  \State \Return $D,\ stride$
-\EndFunction
-\end{algorithmic}
-
-\begin{algorithmic}[1]
-\Function{DecodeDict}{$data,\ out\_len$}
-  \State $i \gets 0$
-  \For{$j \gets 0$ to $out\_len-1$}
-  \State $v \gets data_j$
-  \State $out_{i+0} \gets (D_v >> \ 0) \bitand 255$
-  \State $out_{i+1} \gets (D_v >> \ 8) \bitand 255$
-  \State $out_{i+2} \gets (D_v >> 16) \bitand 255$
-  \State $out_{i+3} \gets (D_v >> 24) \bitand 255$
-  \State $i \gets i + 4$ \Comment{Only implemented for $stride = 4$}
- \EndFor
-  \State \Return $out$
-\EndFunction
-\end{algorithmic}
-
-\item{\textbf{X4}:}
-The byte stream consists of a 7-bit encoded uncompressed length, which
-must be a multiple of 4, followed by 4 compressed lengths also 7-bit
-encoded.  Each of these compressed byte streams is then itself a valid
-$cdata$ stream and will recurse again, each starting with their own
-format flag.  The total uncompressed byte stream is then an
-interleaving of one byte in turn from each of the 4 substreams (in
-order of 1st to 4th).  Thus an array of 32-bit unsigned integers could
-be unpacked using X4 to compress each of the 8-bit components together
-with their own algorithm.
-
-\begin{algorithmic}[1]
-\Function{DecodeX4}{$len$}
-  \State $ulen \gets $\Call{ReadInt7}{}
-  \State $plen \gets ulen / 4$
-  \For{$i \gets 0$ to $3$} \Comment{Fetch 4 compressed lengths}
-    \State $clen_i \gets $\Call{ReadInt7}{}
-  \EndFor
-  \State $X0 \gets $\Call{ArithDecode}{$plen$} \Comment{Decode 4 streams}
-  \State $X1 \gets $\Call{ArithDecode}{$plen$}
-  \State $X2 \gets $\Call{ArithDecode}{$plen$}
-  \State $X3 \gets $\Call{ArithDecode}{$plen$}
-  \Statex
-  \State $i \gets 0$
-  \For{$j \gets 0$ to $plen-1$} \Comment{Interleave}
-    \State $out_{i+0} \gets X0_j$
-    \State $out_{i+1} \gets X1_j$
-    \State $out_{i+2} \gets X2_j$
-    \State $out_{i+3} \gets X3_j$
-    \State $i \gets i+4$
-  \EndFor
-  \State \Return $out$
-\EndFunction
-\end{algorithmic}
-
-\item{\textbf{NOSIZE}:}
-Do not store the size of the uncompressed data stream.  This
-information is not required when the data stream is one of the
-sub-four streams in the X4 format.
-
-\item{\textbf{CAT}:}
-The uncompressed data stream is the same as the compressed stream.
-This is useful for very short data where the overheads of compressing
-are too high.
-
-\begin{algorithmic}[1]
-\Function{DecodeCat}{$len$}
-  \For{$i \gets 0$ to $len-1$}
-    \State $out_i \gets $\Call{ReadByte}{}
-  \EndFor
-  \State \Return $out$
-\EndFunction
-\end{algorithmic}
-
-% \item{\textbf{RLE}:}
-% For run-length encoded data streams the stream consists of a list of
-% run-lengths (optionally order-0 entropy encoded) followed by list of
-% run-lengths followed by a list of literals (non-run byte values),
-% entropy encoded using whatever scheme the format flags indicate.
-%
-% The data stream starts with 7-bit encoded uncompressed meta-data size
-% followed by 7-bit encoded uncompressed literal-data size.  The bottom
-% bit of the meta-data size is a flag to indicate whether the
-% run-lengths as stored uncompressed (1) or order-0 entropy encoded (0).
-% In both cases the actual size of the run-lengths is halved, by
-% shifting out the bottom bit flag.  If the run lengths are entropy
-% encoded, its byte stream starts with a 7-bit encoded size of the
-% compressed run-length stream (otherwise this is the same as the
-% uncompressed meta-data size).
-%
-% The run length mechanism used always stores run lengths for certain
-% byte values and never for other values, irrespective of the run
-% lengths.  The run-length byte stream starts with an 8-bit value
-% holding the number of literals for which runs will be stored, with
-% value 0 meaning all 256 possible literals.  This is then followed by
-% the literal values for which runs are stored.  Run lengths are stored
-% using the big-endian 7-bit notation, but as $length-1$ given a run
-% length of zero can never be stored (the literal would not be
-% present).
-%
-% For example if `R' and `U` are deemed to be worthy of
-% storing run lengths while `N' is not, then for the string
-% ``URRRRUNNURUUN'' the byte stream starts with
-% \{2, `R',`U'\}, the run lengths (minus one) for `U' and `R's only
-% \{0,3,0,0,0,1\}, and literals \{U,R,U,N,N,U,R,U,N\}.
-%
-% FIXME: reimplement this using adaptive arith with run map being
-% computed on-the-fly (run using literal as context, or delta and run0
-% only).
-
-\item{\textbf{RLE}:}
-For run-length encoded data streams an additional model is used to
-hold the number of occurences of each symbol, with the symbols them
-being order-0 or order-1 depending on the ORDER flag.
-
-After the symbol is decoded, the run length must be decoded to
-indicate how many \emph{extra} copies of this symbol occur.  Long runs
-are broken into a series of lengths of no more than 15.  If length 15
-is decoded it indicates we must decode an additional length and add to
-the current one.  The context used for the run length model is the
-symbol itself for the initial run, 256 for the first continuation run
-(if $\ge 16$) and 257 for any further continuation runs.  Thus encoding
-50 `A' characters would first store symbol `A' followed by run length
-15 (with context `A'), length 15 (context 256), length 15 (context
-257), and length 5 (context 258).
-
-For example, if we have the string ``RRRRUNN'' we will decode
-symbol `R' run 3, symbol `U' run 0, symbol `N' run 1.
-
-\begin{algorithmic}[1]
-\Function{UnRLE0}{$len$}
-  \State $max\_sym \gets $\Call{ReadByte}{}
-  \State $model\_lit \gets $\Call{ModelCreate}{$max\_sym$}
-  \For{$i \gets 0$ to $257$}
-    \State $model\_run_i \gets $\Call{ModelCreate}{$16$}
-  \EndFor
-  \Statex
-  \State $i \gets 0$
-  \While{$i < len$}
-    \State $out_i \gets model\_lit.$\Call{ModelDecode}{$rc$}
-    \State $part \gets model\_run_{out_i}.$\Call{ModelDecode}{$rc$}
-    \State $run \gets part$
-    \State $rctx \gets 256$
-    \While{$part = 15$}
-      \State $part \gets model\_run_{rctx}.$\Call{ModelDecode}{$rc$}
-      \State $rctx \gets 257$
-      \State $run \gets run + part$
-    \EndWhile
-    \For{$j \gets 1$ to $run$}
-      \State $out_{i+j} \gets out_i$
-    \EndFor
-    \State $i \gets run+1$
-  \EndWhile
-  \State \Return $out$
-\EndFunction
-\end{algorithmic}
-
-The order-1 run length variant is identical to order-0 except the
-previous symbol is used as the context for the next literal.  The
-context for the run length does not change.
-
-\begin{algorithmic}[1]
-\Function{UnRLE1}{$len$}
-  \State $max\_sym \gets $\Call{ReadByte}{}
-  \For{$i \gets 0$ to $max\_sym-1$}
-    \State $model\_lit_i \gets $\Call{ModelCreate}{$max\_sym$}
-  \EndFor
-  \For{$i \gets 0$ to $257$}
-    \State $model\_run_i \gets $\Call{ModelCreate}{$16$}
-  \EndFor
-  \Statex
-  \State $last \gets 0$
-  \State $i \gets 0$
-  \While{$i < len$}
-    \State $out_i \gets model\_lit_{last}.$\Call{ModelDecode}{$rc$}
-    \State $last \gets out_i$
-    \State $part \gets model\_run_{last}.$\Call{ModelDecode}{$rc$}
-    \State $run \gets part$
-    \State $rctx \gets 256$
-    \While{$part = 15$}
-      \State $part \gets model\_run_{rctx}.$\Call{ModelDecode}{$rc$}
-      \State $rctx \gets 257$
-      \State $run \gets run + part$
-    \EndWhile
-    \For{$j \gets 1$ to $run$}
-      \State $out_{i+j} \gets last$
-    \EndFor
-    \State $i \gets run+1$
-  \EndWhile
-  \State \Return $out$
-\EndFunction
-\end{algorithmic}
-
-\item{\textbf{PACK}:}
-Data containing only 1, 2, 4 or 16 distinct values can have multiple
-values packed into a single byte (infinite, 8, 4 or 2).  The distinct
-symbol values do not need to be adjacent as a mapping table $M$
-converts quantised value $x$ to original symbol $M_x$ where $x$ is the
-number of distinct possible symbols.
-
-The first byte holds $nsym$, the number of distinct values, followed
-by $nsym$ bytes to construct the $M$ map.  If $nsym = 1$ then the byte
-stream is a stream of constant values and no bit-packing is done (we
-know every value already).  If $nsym = 2$ then each symbol is 1 bit (8
-per byte), if $2 < nsym \le 4$ symbols are 2 bits each (4 per byte)
-and if $4 < nsym \le 16$ symbols are 4 bits each (2 per byte). It is
-not permitted to have $nsym > 16$ as bit packing is not possible.
-Bits are unpacked from low to high.
-
-\begin{algorithmic}[1]
-\Function{Unpack}{$len$}
-  \State $n \gets $\Call{ReadByte}{} \Comment{Read map $M_0$ to $M_{n-1}$}
-  \For{$i \gets 0$ to $n-1$}
-    \State $M_i \gets $ \Call{ReadByte}{}
-    \EndFor
-  \Statex
-  \If{$n <= 1$} \Comment{Constant value}
-    \For{$i \gets 0$ to $len-1$}
-      \State $out_i \gets M_0$
-    \EndFor
-  \Statex
-  \ElsIf{$n <= 2$} \Comment{1 bit per value}
-    \For{$i \gets 0$ to $len-1$}
-      \If{$i \bmod 8 = 0$}
-        \State $v \gets$ \Call{ReadByte}{}
-      \EndIf
-      \State $out_i \gets M_{(v \bitand 1)}$
-      \State $v = v >> 1$
-    \EndFor
-  \Statex
-  \ElsIf{$n <= 4$} \Comment{2 bits per value}
-    \For{$i \gets 0$ to $len-1$}
-      \If{$i \bmod 4 = 0$}
-        \State $v \gets$ \Call{ReadByte}{}
-      \EndIf
-      \State $out_i \gets M_{(v \bitand 3)}$
-      \State $v = v >> 2$
-    \EndFor
-  \Statex
-  \ElsIf{$n <= 16$} \Comment{4 bits per value}
-    \For{$i \gets 0$ to $len-1$}
-      \If{$i \bmod 2 = 0$}
-        \State $v \gets$ \Call{ReadByte}{}
-      \EndIf
-      \State $out_i \gets M_{(v \bitand 15)}$
-      \State $v = v >> 4$
-    \EndFor
-  \Statex
-  \Else
-    \State \Call{Error}{}
-  \EndIf
-  \Statex
-  \State \Return out
-\EndFunction
-\end{algorithmic}
-
-\end{itemize}
 
 \end{document}
