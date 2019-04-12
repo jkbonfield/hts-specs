@@ -2,8 +2,8 @@
 // within a given alphabet, using the range coder to get/put the
 // compressed data.
 
-const MAX_FREQ = ((1<<16)-16)
-const STEP     = 8
+const MAX_FREQ = ((1<<16)-17)
+const STEP     = 16
 
 module.exports = class ByteModel {
     constructor(max_sym = 256) {
