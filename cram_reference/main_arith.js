@@ -51,7 +51,7 @@ function decode0(src) {
 
     var n_out = stream.ReadUint32();
     stream.ReadUint32();
-    var output = new Buffer(n_out);
+    var output = new Buffer.allocUnsafe(n_out);
 
     var byte_model = new ByteModel(256);
 
@@ -89,7 +89,7 @@ function decode1(src) {
 
     var n_out = stream.ReadUint32();
     stream.ReadUint32();
-    var output = new Buffer(n_out);
+    var output = new Buffer.allocUnsafe(n_out);
 
     var byte_model = new Array(256);
     for (var i = 0; i < 256; i++)

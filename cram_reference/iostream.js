@@ -36,6 +36,25 @@ module.exports = class IOStream {
 	return i
     }
 
+    ReadUint7() {
+	// NB: In C code x1234 is currently 94 12, ie big endian.
+	// Little endian would be more complex below, but b412.
+	// This then also matches ITF8.  Which in turn means
+	// it we can redefine rANS to be Uint7 based without a
+	// spec change for it.
+	//
+	// Variable sized unsigned integers
+	var i = 0;
+	var s = 0;
+	do {
+	    var c = this.ReadByte();
+	    i = i | ((c & 0x7f)<<s);
+	    s += 7;
+	} while ((c & 0x80))
+
+	return i;
+    }
+
     ReadITF8() {
 	var i = this.buf[this.pos];
 	this.pos++;
@@ -99,6 +118,13 @@ module.exports = class IOStream {
     WriteUint32(u) {
 	this.buf.writeInt32LE(u, this.pos);
 	this.pos += 4;
+    }
+
+    WriteUint7(i) {
+	do {
+	    this.WriteByte((i & 0x7f) | ((i > 0x80) << 7));
+	    i >>= 7;
+	} while (i > 0);
     }
 
     WriteITF8(i) {
