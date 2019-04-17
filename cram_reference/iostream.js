@@ -109,6 +109,10 @@ module.exports = class IOStream {
 	    this.buf[this.pos++] = buf[i]
     }
 
+    WriteStream(stream) {
+	this.WriteData(stream.buf, stream.pos)
+    }
+
     WriteUint16(u) {
 	//this.buf.writeInt16LE(u, this.pos);
 	this.WriteByte((u>>8)&0xff)

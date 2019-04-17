@@ -1,12 +1,13 @@
-// Validated: decode 0 1 64 65 128 192 193 8 9 4 68
-//            encode 0 1 64 65
+// Validated: decode 0 1 64 65 128 129 192 193 8 9 4 132
+//            encode 0 1 64 65 128 129 192 193 8 9 x x
 
 const RangeCoder = require("./arith_sh");
 const IOStream = require("./iostream");
 const ByteModel = require("./byte_model");
+const bzip2 = require("bzip2");
 
 const ARITH_ORDER  = 1
-const ARITH_DICT   = 4
+const ARITH_EXT    = 4
 const ARITH_X4     = 8
 const ARITH_NOSIZE = 16
 const ARITH_CAT    = 32
@@ -36,32 +37,27 @@ module.exports = class RangeCoderGen {
 	    return this.decodeCat(this.stream, n_out)
 
 	// Meta data
-	if (flags & ARITH_DICT) {
-	    var D, stride
-	    [D, stride] = this.decodeDictMeta(this.stream)
-	    e_len /= 4
-	}
 	if (flags & ARITH_PACK) {
 	    var P
 	    [P, e_len] = this.decodePackMeta(this.stream)
 	}
 
 	// Entropy decode
-	if (flags & ARITH_RLE) {
+	if (flags & ARITH_EXT) {
+	    var data = this.decodeExt(this.stream, e_len)
+	} else if (flags & ARITH_RLE) {
 	    var data = order
 		? this.decodeRLE1(this.stream, e_len)
-		: this.decodeRLE0(this.stream, e_len);
+		: this.decodeRLE0(this.stream, e_len)
 	} else {
 	    var data = order
 		? this.decode1(this.stream, e_len)
-		: this.decode0(this.stream, e_len);
+		: this.decode0(this.stream, e_len)
 	}
 
 	// Transforms
 	if (flags & ARITH_PACK)
 	    data = this.decodePack(data, P, n_out)
-	if (flags & ARITH_DICT)
-	    data = this.decodeDict(data, D, stride, n_out)
 
 	return data
     }
@@ -73,15 +69,26 @@ module.exports = class RangeCoderGen {
 	this.stream.WriteUint7(src.length);
 
 	var order = flags & ARITH_ORDER;
+	var e_len = src.length;
 
+	// step 1: Encode meta-data
+	var pack_meta
+	if (flags & ARITH_PACK)
+	    [pack_meta, src, e_len] = this.encodePack(src)
+
+	// step 2: Write any meta data
+	if (flags & ARITH_PACK)
+	    this.stream.WriteStream(pack_meta)
+
+	// step 3: arith encoding below
 	if (flags & ARITH_RLE) {
 	    return order
-		? this.encodeRLE1(src, this.stream)
-		: this.encodeRLE0(src, this.stream);
+		? this.encodeRLE1(src, e_len, this.stream)
+		: this.encodeRLE0(src, e_len, this.stream);
 	} else {
 	    return order
-		? this.encode1(src, this.stream)
-		: this.encode0(src, this.stream);
+		? this.encode1(src, e_len, this.stream)
+		: this.encode0(src, e_len, this.stream);
 	}
     }
 
@@ -105,9 +112,7 @@ module.exports = class RangeCoderGen {
 	return output;
     }
 
-    encode0(src,out) {
-	const n_in = src.length
-
+    encode0(src, n_in, out) {
 	// Count the maximum symbol present
 	var max_sym = 0;
 	for (var i = 0; i < n_in; i++)
@@ -152,9 +157,7 @@ module.exports = class RangeCoderGen {
 	return output;
     }
 
-    encode1(src, out) {
-	const n_in = src.length
-
+    encode1(src, n_in, out) {
 	// Count the maximum symbol present
 	var max_sym = 0;
 	for (var i = 0; i < n_in; i++)
@@ -176,6 +179,33 @@ module.exports = class RangeCoderGen {
 	rc.RangeFinishEncode(out)
 
 	return out.buf.slice(0, out.pos);
+    }
+
+    //----------------------------------------------------------------------
+    // External codec
+    decodeExt(stream, n_out) {
+	// Bzip2 only for now
+	var output = new Buffer.allocUnsafe(n_out)
+	var bits = bzip2.array(stream.buf.slice(stream.pos))
+	var size = bzip2.header(bits)
+	var j = 0
+	do {
+	    var chunk = bzip2.decompress(bits, size);
+	    if (chunk != -1) {
+		// Is there a faster Uint8Array to Buffer copy method?
+		for (var i = 0; i < chunk.length; i++)
+		    output[j++] = chunk[i]
+		size -= chunk.length
+	    }
+	} while(chunk != -1);
+
+	return output
+    }
+
+    encodeExt(stream, n_out) {
+	// We cannot compress using Bzip2 now as it's
+	// absent from bzip2.js, but consider using
+	// https://github.com/cscott/compressjs
     }
 
     //----------------------------------------------------------------------
@@ -214,9 +244,7 @@ module.exports = class RangeCoderGen {
 	return output;
     }
 
-    encodeRLE0(src,out) {
-	const n_in = src.length
-
+    encodeRLE0(src, n_in, out) {
 	// Count the maximum symbol present
 	var max_sym = 0;
 	for (var i = 0; i < n_in; i++)
@@ -302,9 +330,7 @@ module.exports = class RangeCoderGen {
 	return output;
     }
 
-    encodeRLE1(src,out) {
-	const n_in = src.length
-
+    encodeRLE1(src, n_in, out) {
 	// Count the maximum symbol present
 	var max_sym = 0;
 	for (var i = 0; i < n_in; i++)
@@ -408,47 +434,110 @@ module.exports = class RangeCoderGen {
 	return out
     }
 
-    //----------------------------------------------------------------------
-    // Dict method
-    decodeDictMeta(stream) {
-	var stride = stream.ReadByte()
-	var n = stream.ReadByte()
+    // Compute M array and return meta-data stream
+    packMeta(src) {
+	var stream = new IOStream("", 0, 1024)
 
-	var D = new Array(n);
-	var i = 0;
-	while (i < n) {
-	    var x = stream.ReadByte()
-	    var lit = x % 16;
-	    var run = x / 16;
+	// Count symbols
+	var M = new Array(256)
+	for (var i = 0; i < src.length; i++)
+	    M[src[i]] = 1
 
-	    for (var j = 0; j < lit; j++)
-		D[i+j] = stream.ReadUint7()
-	    i += lit
-	    if (run > 0) {
-		for (var j = 0; j < run; j++)
-		    D[i+j] = D[i+j-1]+1
-		i += run;
+	// Write Map
+	for (var nsym = 0, i = 0; i < 256; i++)
+	    if (M[i])
+		M[i] = ++nsym; // map to 1..N
+	stream.WriteByte(nsym);
+
+	// FIXME: add check for nsym > 16?
+	// Or just accept it as an inefficient waste of time.
+	for (var i = 0; i < 256; i++) {
+	    if (M[i]) {
+		stream.WriteByte(i) // adjust to 0..N-1
+		M[i]--;
 	    }
 	}
 
-	return [D, stride]
+	return [stream, M, nsym]
     }
 
-    decodeDict(data, D, stride, len) {
-	var out = new Buffer.allocUnsafe(len);
+    encodePack(data) {
+	var meta, M, nsym
+	[meta, M, nsym] = this.packMeta(data)
 
-	for (var i = 0, j = 0; i < len; i+=stride, j++) {
-	    var v = D[data[j]]
-	    out[i+0] = (v >>  0) & 255
-	    if (stride > 1)
-		out[i+1] = (v >>  8) & 255
-	    if (stride > 2)
-		out[i+2] = (v >> 16) & 255
-	    if (stride > 3)
-		out[i+3] = (v >> 24) & 255
+	var len = data.length
+	var i = 0;
+	if (nsym <= 1) {
+	    // Constant values
+	    meta.WriteUint7(0)
+	    return [meta, new Buffer.allocUnsafe(0), 0];
 	}
 
-	return out
+	if (nsym <= 2) {
+	    // 1 bit per value
+	    var out = new Buffer.allocUnsafe(Math.floor((len+7)/8));
+	    for (var i = 0, j = 0; i < (len & ~7); i+=8, j++)
+		out[j] = (M[data[i+0]]<<0)
+		       + (M[data[i+1]]<<1)
+		       + (M[data[i+2]]<<2)
+		       + (M[data[i+3]]<<3)
+		       + (M[data[i+4]]<<4)
+		       + (M[data[i+5]]<<5)
+		       + (M[data[i+6]]<<6)
+		       + (M[data[i+7]]<<7)
+	    if (i < len) {
+		out[j] = 0;
+		var v = 0;
+		while (i < len) {
+		    out[j] |= M[data[i++]]<<v;
+		    v++;
+		}
+		j++;
+	    }
+
+	    meta.WriteUint7(j)
+	    return [meta, out, out.length]
+	}
+
+	if (nsym <= 4) {
+	    // 2 bits per value
+	    var out = new Buffer.allocUnsafe(Math.floor((len+3)/4));
+	    for (var i = 0, j = 0; i < (len & ~3); i+=4, j++)
+		out[j] = (M[data[i+0]]<<0)
+		       + (M[data[i+1]]<<2)
+		       + (M[data[i+2]]<<4)
+		       + (M[data[i+3]]<<6)
+
+	    if (i < len) {
+		out[j] = 0;
+		var v = 0;
+		while (i < len) {
+		    out[j] |= M[data[i++]]<<v;
+		    v+=2;
+		}
+		j++;
+	    }
+
+	    meta.WriteUint7(j)
+	    return [meta, out, out.length]
+	}
+
+	if (nsym <= 16) {
+	    // 4 bits per value
+	    var out = new Buffer.allocUnsafe(Math.floor((len+1)/2));
+	    for (var i = 0, j = 0; i < (len & ~1); i+=2, j++)
+		out[j] = (M[data[i+0]]<<0)
+		       + (M[data[i+1]]<<4)
+	    if (i < len)
+		out[j++] = M[data[i++]];
+
+	    meta.WriteUint7(j)
+	    return [meta, out, out.length]
+	}
+
+	// Otherwise an expensive NOP
+	meta.WriteUint7(data.length)
+	return [meta, data, data.length]
     }
 
     //----------------------------------------------------------------------
