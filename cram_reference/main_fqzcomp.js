@@ -6,13 +6,12 @@ var fs = require("fs");
 var fqz = require("./fqzcomp");
 var argv = require('minimist')(process.argv.slice(2), { boolean: "d" });
 
-if (argv._.length != 2) {
-    process.stderr.write("Usage: node main_rans.js [-d] input-file output-file\n");
+if (argv._.length != 1) {
+    process.stderr.write("Usage: node main_fqzcomp.js [-d] input-file > output-file\n");
     process.exit(1);
 }
 
 var filein  = argv._[0]
-var fileout = argv._[1]
 
 var buf = fs.readFileSync(filein);
 
@@ -53,16 +52,19 @@ if (!argv.d) {
 
     var buf2 = fqz.encode(buf, q_lens, q_dirs);
     process.stderr.write("Compress " +buf.length + " => " + buf2.length + "\n");
-    fs.writeFileSync(fileout, buf2);
+    var hdr = new Buffer.allocUnsafe(8);
+    hdr.writeInt32LE(buf.length, 0);
+    hdr.writeInt32LE(buf2.length, 4);
+    process.stdout.write(hdr);
+    process.stdout.write(buf2);
 
 } else {
     var q_lens = new Array
-    var buf2 = fqz.decode(buf, q_lens);
-
-    console.log("decoded")
+    // Consume ulen and clen from outer test harness (pointless as non-blocking atm)
+    var buf2 = fqz.decode(buf.slice(8), q_lens);
 
     // Split into newlines so we can do easy data comparison
-    var buf3 = new Buffer(buf2.length + q_lens.length)
+    var buf3 = new Buffer.allocUnsafe(buf2.length + q_lens.length)
     var rec = 0;
     var len = q_lens[rec++]
     var j = 0;
@@ -75,5 +77,5 @@ if (!argv.d) {
     }
 
     process.stderr.write("Decompress " + buf.length + " => " + buf3.length + "\n");
-    fs.writeFileSync(fileout, buf3);
+    process.stdout.write(buf3);
 }

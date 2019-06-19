@@ -26,7 +26,6 @@ module.exports = class IOStream {
     ReadUint16() {
 	var i = this.ReadByte()<<8
 	i |= this.ReadByte()
-	console.log("i=",i)
 	return i
     }
 

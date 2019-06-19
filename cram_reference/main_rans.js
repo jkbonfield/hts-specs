@@ -6,24 +6,44 @@ var fs = require("fs");
 var rans = require("./rans");
 var argv = require('minimist')(process.argv.slice(2), { boolean: "d" });
 
-if (argv._.length != 2) {
-    process.stderr.write("Usage: node main_rans.js [-d] [-o order] input-file output-file\n");
+if (argv._.length != 1) {
+    process.stderr.write("Usage: node main_rans.js [-d] [-o order] input-file > output-file\n");
     process.exit(1);
 }
 
 var filein  = argv._[0]
-var fileout = argv._[1]
 
 var buf = fs.readFileSync(filein);
+var blk_size = 1024*1024;
 
 if (!argv.d) {
     var order = argv.o != undefined ? argv.o : 0;
-    var buf2 = rans.encode(buf, order);
-    process.stderr.write("Compress order "+order+", "+buf.length+" => " + buf2.length + "\n");
-    fs.writeFileSync(fileout, buf2);
+    var pos = 0;
+    var out_len = 0;
+    while (pos < buf.length) {
+	var buf2 = rans.encode(buf.slice(pos, pos+blk_size), order);
+	var header = new Buffer.allocUnsafe(5);
+	header[0] = order;
+	header.writeInt32LE(buf2.length, 1);
+	process.stdout.write(header)
+	process.stdout.write(buf2)
+	pos += blk_size;
+	out_len += buf2.length;
+    }
+    process.stderr.write("Compress order "+order+", "+buf.length+" => " + out_len + "\n");
 
 } else {
-    var buf2 = rans.decode(buf);
-    process.stderr.write("Decompress " + buf.length + " => " + buf2.length + "\n");
-    fs.writeFileSync(fileout, buf2);
+    var pos = 0;
+    var out_len = 0;
+    while (pos < buf.length) {
+	var order = buf[0];
+	pos++;
+	var len = buf.readInt32LE(pos);
+	pos += 4;
+	var buf2 = rans.decode(buf.slice(pos, pos+len));
+	process.stdout.write(buf2)
+	out_len += buf2.length;
+	pos += len;
+    }
+    process.stderr.write("Decompress " + buf.length + " => " + out_len + "\n");
 }

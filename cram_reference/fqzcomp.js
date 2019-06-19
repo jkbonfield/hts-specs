@@ -256,8 +256,9 @@ function decode_fqz_new_record(src, rc, gparams, model, state) {
     state.prevq = 0
 }
 
-function decode_fqz(src, q_lens, n_out) {
+function decode_fqz(src, q_lens) {
     // Decode parameter block
+    var n_out = src.ReadUint7()
     var gparams = decode_fqz_params(src)
     if (!gparams) return
     var params = gparams.params
@@ -268,7 +269,7 @@ function decode_fqz(src, q_lens, n_out) {
     // Create our entropy encoder and output buffers
     var rc = new RangeCoder(src)
     rc.RangeStartDecode(src)
-    var output = new Buffer(n_out)
+    var output = new Buffer.allocUnsafe(n_out)
 
     // Internal FQZ state
     var state = {
@@ -288,7 +289,6 @@ function decode_fqz(src, q_lens, n_out) {
 	if (state.p == 0) {
 	    decode_fqz_new_record(src, rc, gparams, model, state)
 	    if (state.is_dup > 0) {
-		console.log("decode dup")
 		if (model.dup.ModelDecode(src, rc)) {
 		    // Duplicate of last line
 		    for (var x = 0; x < len; x++)
@@ -321,13 +321,9 @@ function decode_fqz(src, q_lens, n_out) {
 function decode(src, q_lens) {
     var stream = new IOStream(src);
 
-    var n_out = stream.ReadUint32(); stream.ReadUint32();
+    //var n_out = stream.ReadUint32(); stream.ReadUint32(); // move to main
 
-    //console.log("q_len",q_len)
-    //console.log("n_in", n_in)
-    console.log("n_out",n_out)
-
-    return decode_fqz(stream, q_lens, n_out);
+    return decode_fqz(stream, q_lens);
 }
     
 //----------------------------------------------------------------------
@@ -381,10 +377,6 @@ function pick_fqz_params(src, q_lens, q_dirs, qhist) {
 	else
 	    qshift = 4
     }
-
-    console.log("Nsym", nsym)
-    console.log("Max_sym", max_sym)
-
 
 //    // Two params and a 1-bit selector.
 //    // This is 1% overhead vs two data sets compressed independently.
@@ -588,7 +580,6 @@ function encode_fqz_params(out, params, qhist, qtab, ptab, dtab, stab) {
     out.WriteByte(5);            // FQZ format number
     var gflags = ((params.length > 1) ? GFLAG_MULTI_PARAM : 0)
 	       | ((params[0].do_stab) ? GFLAG_HAVE_STAB   : 0)
-    console.log("gflags",gflags)
     out.WriteByte(gflags)
 
     if (gflags & GFLAG_MULTI_PARAM)
@@ -600,7 +591,6 @@ function encode_fqz_params(out, params, qhist, qtab, ptab, dtab, stab) {
 	out.WriteByte(max_sel)
 	store_array(out, stab, 256)
     }
-    console.log("nparam",params.length,"sbits",params[0].sbits)
 
     // Store per-param meta-data
     for (var p = 0; p < params.length; p++) {
@@ -801,10 +791,9 @@ function encode(src, q_lens, q_dirs) {
     }
 
     var out = new IOStream("", 0, src.length*1.1 + 100); // FIXME: guestimate worst case
-    out.WriteUint32(src.length); out.WriteUint32(0); // uncompressed size
-    
+
+    out.WriteUint7(src.length);
     var params = pick_fqz_params(src, q_lens, q_dirs, qhist)
-    console.log(params)
     var out = encode_fqz_params(out, params, qhist, qtab, ptab, dtab, stab)
     return encode_fqz(out, src, q_lens, q_dirs, params, qhist, qtab, ptab, dtab, stab)
 }

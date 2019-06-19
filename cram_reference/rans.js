@@ -167,7 +167,7 @@ function RansDecode0(src, nbytes) {
 	R[i] = src.ReadUint32();
 
     // Main decode loop
-    var output = new Buffer(nbytes);
+    var output = new Buffer.allocUnsafe(nbytes);
     for (var i = 0; i < nbytes; i++) {
 	var i4 = i%4;
 	var f = RansGetCumulativeFreq(R[i4]);
@@ -366,7 +366,7 @@ function RansDecode1(src, nbytes) {
     }
 
     // Main decode loop
-    var output = new Buffer(nbytes);
+    var output = new Buffer.allocUnsafe(nbytes);
     var nbytes4 = Math.floor(nbytes/4);
     for (var i = 0; i < nbytes4; i++) {
 	for (var j = 0; j < 4; j++) {
