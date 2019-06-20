@@ -17,6 +17,12 @@ module.exports = class IOStream {
     // ----------
     // Reading
 
+    ReadData(len) {
+	var A = this.buf.slice(this.pos, this.pos+len)
+	this.pos += len;
+	return A
+    }
+
     ReadByte() {
 	const b = this.buf[this.pos]
 	this.pos++
