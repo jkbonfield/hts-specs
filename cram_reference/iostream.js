@@ -41,14 +41,25 @@ module.exports = class IOStream {
 	return i
     }
 
+//    ReadUint7() {
+//	// Variable sized unsigned integers
+//	var i = 0;
+//	var s = 0;
+//	do {
+//	    var c = this.ReadByte();
+//	    i = i | ((c & 0x7f)<<s);
+//	    s += 7;
+//	} while ((c & 0x80))
+//
+//	return i;
+//    }
+
     ReadUint7() {
 	// Variable sized unsigned integers
 	var i = 0;
-	var s = 0;
 	do {
 	    var c = this.ReadByte();
-	    i = i | ((c & 0x7f)<<s);
-	    s += 7;
+	    i = (i<<7) | (c & 0x7f)
 	} while ((c & 0x80))
 
 	return i;
@@ -123,11 +134,25 @@ module.exports = class IOStream {
 	this.pos += 4;
     }
 
+//    WriteUint7(i) {
+//	do {
+//	    this.WriteByte((i & 0x7f) | ((i > 0x80) << 7));
+//	    i >>= 7;
+//	} while (i > 0);
+//    }
+
     WriteUint7(i) {
+	var s = 0;
+	var X = i;
 	do {
-	    this.WriteByte((i & 0x7f) | ((i > 0x80) << 7));
-	    i >>= 7;
-	} while (i > 0);
+	    s += 7;
+	    X >>= 7;
+	} while (X > 0);
+
+	do {
+	    s -= 7;
+	    this.WriteByte(((i >> s) & 0x7f) + ((s > 0) << 7))
+	} while (s > 0);
     }
 
     WriteITF8(i) {
