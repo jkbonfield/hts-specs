@@ -93,19 +93,87 @@ function RansEncPut(R, dst, start, freq, scale_bits) {
     return R;
 }
 
+
+//----------------------------------------------------------------------
+// Run length encoding
+function DecodeRLEMeta(src) {
+    var u_meta_len = src.ReadUint7()
+    var rle_len = src.ReadUint7()
+
+    // Decode RLE lengths
+    if (u_meta_len & 1) {
+	var rle_meta = src.ReadData(u_meta_len/2)
+    } else {
+	var comp_meta_len = src.ReadUint7()
+	var rle_meta = src.ReadData(comp_meta_len)
+	rle_meta = RansDecode0(new IOStream(rle_meta), u_meta_len/2)
+    }
+
+    return [rle_meta, rle_len]
+}
+
+function DecodeRLE(buf, rle_meta, len) {
+    var src = new IOStream(buf);
+    var rle_meta = new IOStream(rle_meta)
+
+    var out = new Buffer.allocUnsafe(len)
+
+    // Decode list of symbols for which RLE lengths are applied
+    var L = new Array(256)
+    var n = rle_meta.ReadByte()
+    if (n == 0)
+	n = 256;
+    for (var i = 0; i < n; i++)
+	L[rle_meta.ReadByte()] = 1
+
+    //return buf
+
+    // Expand up buf+meta to out; i = buf index, j = out index
+    var j = 0;
+    for (var i = 0; j < len; i++) {
+	var sym = buf[i];
+	if (L[sym]) {
+	    var run = rle_meta.ReadUint7()
+	    for (var r = 0; r <= run; r++)
+		out[j++] = sym
+	} else {
+	    out[j++] = sym
+	}
+    }
+
+    return out
+}
+
 //----------------------------------------------------------------------
 // Main rANS entry function: decodes a compressed src and
 // returns the uncompressed buffer.
 function decode(src) {
     var stream = new IOStream(src);
-    var order = stream.ReadByte();
+    var format = stream.ReadByte();
     var n_out = stream.ReadUint7();
 
-    if (order == 0) {
-	return RansDecode0(stream, n_out)
-    } else {
-	return RansDecode1(stream, n_out)
+    var order = format & 1
+    var rle   = format & 64;
+
+    // Run length encoding
+    if (rle) {
+	var expanded_len = n_out
+	var [rle_meta, n_out] = DecodeRLEMeta(stream)
     }
+
+    // Uncompress data (all, packed or run literals)
+    if (order == 0) {
+	var buf = RansDecode0(stream, n_out)
+    } else {
+	var buf = RansDecode1(stream, n_out)
+    }
+
+    // Apply expansion transforms
+    if (rle) {
+	buf = DecodeRLE(buf, rle_meta, expanded_len);
+    }
+
+    return buf
 }
 
 function encode(src, order) {
@@ -567,7 +635,6 @@ function RansEncode1(src) {
 
     WriteFrequencies1(freq, F, F0);
     var cfreq = RansEncode0(freq.buf.slice(0, freq.pos))
-    console.error(freq.pos, cfreq.length)
     if (cfreq.length < freq.pos) {
 	output.WriteByte(1);
 	output.WriteUint7(freq.pos)
