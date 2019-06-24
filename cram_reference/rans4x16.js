@@ -96,6 +96,56 @@ function RansEncPut(R, dst, start, freq, scale_bits) {
 
 //----------------------------------------------------------------------
 // Run length encoding
+function EncodeRLE(src) {
+    // Step 1: find which symbols benefit from RLE
+    var L = new Array(256)
+    for (var i = 0; i < 256; i++)
+	L[i] = 0
+
+    var last = -1
+    for (var i = 0; i < src.length; i++) {
+	L[src[i]] += src[i] == last ? 1 : -1
+	last = src[i]
+    }
+
+    var nrle = 0;
+    for (var i = 0; i < 256; i++)
+	if (L[i] > 0)
+	    nrle++
+
+    // Start meta-data as list of symbols to RLE
+    var meta = new IOStream("", 0, nrle+1 + src.length)
+    meta.WriteByte(nrle)
+    for (var i = 0; i < 256; i++)
+	if (L[i] > 0)
+	    meta.WriteByte(i)
+
+    // Step 2: Now apply RLE itself
+    var data = new Buffer.allocUnsafe(src.length)
+    var dpos = 0
+    for (var i = 0; i < src.length; i++) {
+	data[dpos++] = src[i]
+	if (L[src[i]] > 0) {
+	    last = src[i];
+	    var run = 0;
+	    while (i+run+1 < src.length && src[i+run+1] == last)
+		run++;
+	    meta.WriteUint7(run)
+	    i += run
+	}
+    }
+
+    // Compress the meta-data
+    var cmeta = RansEncode0(meta.buf.slice(0, meta.pos))
+    var hdr = new IOStream("", 0, 16)
+    hdr.WriteUint7(meta.pos*2)   // Uncompressed meta-data length + compressed-bit-flag(0)
+    hdr.WriteUint7(dpos)         // Length of RLE encoded data
+    hdr.WriteUint7(cmeta.length) // Compressed meta-data length
+    var meta = Buffer.concat([hdr.buf.slice(0,hdr.pos), cmeta])
+
+    return [meta, data.slice(0, dpos)]
+}
+
 function DecodeRLEMeta(src) {
     var u_meta_len = src.ReadUint7()
     var rle_len = src.ReadUint7()
@@ -146,6 +196,83 @@ function DecodeRLE(buf, rle_meta, len) {
 
 //----------------------------------------------------------------------
 // Bit packing
+
+function EncodePack(src) {
+    // Step 1: identify number of distinct symbols
+    var F = new Array(256)
+    for (var i = 0; i < 256; i++)
+	F[i] = 0
+
+    for (var i = 0; i < src.length; i++)
+	F[src[i]]++
+
+    var P = new Array(256)
+    var nsym = 0;
+    for (var i = 0; i < 256; i++)
+	if (F[i] > 0)
+	    P[i] = nsym++
+
+    if (nsym > 16) {
+	console.error("Too many symbols to pack:",nsym)
+	return
+    }
+
+
+    // Pack data
+    if (nsym <= 1) {
+	// Constant
+	var data = new Buffer.allocUnsafe(0)
+    }
+
+    else if (nsym <= 2) {
+	// 1 bit per value
+	var data = new Buffer.allocUnsafe(Math.ceil(src.length/8))
+	var j = -1
+	for (i = 0; i < src.length; i++) {
+	    if (i % 8 == 0)
+		data[++j] = 0
+	    data[j] += P[src[i]] << (i % 8)
+	}
+    }
+
+    else if (nsym <= 4) {
+	// 2 bits per value
+	var data = new Buffer.allocUnsafe(Math.ceil(src.length/4))
+	var j = -1
+	for (i = 0; i < src.length; i++) {
+	    if (i % 4 == 0)
+		data[++j] = 0
+	    data[j] += P[src[i]] << ((i % 4) * 2)
+	}
+    }
+
+    else {
+	// 4 bits per value
+	var data = new Buffer.allocUnsafe(Math.ceil(src.length/2))
+	var j = -1
+	for (i = 0; i < src.length; i++) {
+	    if (i % 2 == 0)
+		data[++j] = 0
+	    data[j] += P[src[i]] << ((i % 2) * 4)
+	}
+    }
+
+
+    // Produce pack meta-data
+    var meta = new IOStream("", 0, nsym+5)
+    meta.WriteByte(nsym)
+    var j = 0
+    for (var i = 0; i < 256; i++) {
+	if (F[i] > 0) {
+	    F[i] = j++;
+	    meta.WriteByte(i)
+	}
+    }
+    meta.WriteUint7(data.length)
+
+    return [meta.buf.slice(0, meta.pos), data]
+}
+
 
 // Pack meta data is the number and value of distinct symbols plus
 // the length of the packed byte stream.
@@ -220,6 +347,45 @@ function DecodePack(data, P, nsym, len) {
 //
 // Maybe make this more general purpose of X* where we specify the stripe
 // size instead of fixing it at 4?
+function RansEncodeX4(hdr, src) {
+    var stride = 4
+    if (src.length % stride != 0)
+	return
+
+    // Split into multiple streams
+    var ulen = src.length / stride
+    var j = 0
+    var part = new Array(stride)
+    for (var s = 0; s < stride; s++)
+	part[s] = new Array(ulen)
+    for (var i = 0; i < src.length; i+=stride) {
+	for (var s = 0; s < stride; s++)
+	    part[s][j] = src[i+s]
+	j++
+    }
+
+    // Compress each part
+    var comp = new Array(stride)
+    var total = 0
+    for (var s = 0; s < stride; s++) {
+	// Example: try O0 and O1 and choose best
+	var comp0 = encode(part[s], 0)
+	var comp1 = encode(part[s], 1)
+	comp[s] = (comp1.length < comp0.length) ? comp1 : comp0
+	total += comp[s].length
+    }
+
+    // Serialise
+    var out = new IOStream("", 0, total+5*stride)
+    for (var s = 0; s < stride; s++)
+	out.WriteUint7(comp[s].length)
+
+    for (var s = 0; s < stride; s++)
+	out.WriteData(comp[s], comp[s].length)
+
+    return out.buf.slice(0, out.buf.pos)
+}
+
 function RansDecodeX4(src, len) {
     var clen = new Array(4)
     for (i = 0; i < 4; i++)
@@ -245,57 +411,11 @@ function RansDecodeX4(src, len) {
 
 
 //----------------------------------------------------------------------
-// Uncompressed data, aka "cat"
-function RansDecodeCat(src, len) {
-    var out = new Buffer.allocUnsafe(len)
-    for (var i = 0; i < len; i++)
-	out[i] = src.ReadByte()
-
-    return out
-}
-
-
-//----------------------------------------------------------------------
 // Main rANS entry function: decodes a compressed src and
 // returns the uncompressed buffer.
 function decode(src) {
     var stream = new IOStream(src)
     return RansDecodeStream(stream, 0)
-
-    var format = stream.ReadByte();
-    var n_out = stream.ReadUint7();
-
-    var order = format & 1
-    var rle   = format & 64
-    var pack  = format & 128
-
-    // Bit packing
-    if (pack) {
-	var pack_len = n_out
-	var [P, nsym, n_out] = DecodePackMeta(stream)
-    }
-
-    // Run length encoding
-    if (rle) {
-	var rle_len = n_out
-	var [rle_meta, n_out] = DecodeRLEMeta(stream)
-    }
-
-    // Uncompress data (all, packed or run literals)
-    if (order == 0) {
-	var buf = RansDecode0(stream, n_out)
-    } else {
-	var buf = RansDecode1(stream, n_out)
-    }
-
-    // Apply expansion transforms
-    if (rle)
-	buf = DecodeRLE(buf, rle_meta, rle_len)
-
-    if (pack)
-	buf = DecodePack(buf, P, nsym, pack_len)
-
-    return buf
 }
 
 function RansDecodeStream(stream, n_out) {
@@ -314,9 +434,6 @@ function RansDecodeStream(stream, n_out) {
     if (x4)
 	return RansDecodeX4(stream, n_out)
 
-    if (cat)
-	return RansDecodeCat(stream, n_out)
-
     // Bit packing
     if (pack) {
 	var pack_len = n_out
@@ -330,11 +447,12 @@ function RansDecodeStream(stream, n_out) {
     }
 
     // Uncompress data (all, packed or run literals)
-    if (order == 0) {
+    if (cat)
+	var buf = stream.ReadData(n_out)
+    else if (order == 0)
 	var buf = RansDecode0(stream, n_out)
-    } else {
+    else
 	var buf = RansDecode1(stream, n_out)
-    }
 
     // Apply expansion transforms
     if (rle)
@@ -346,18 +464,39 @@ function RansDecodeStream(stream, n_out) {
     return buf
 }
 
-function encode(src, order) {
+function encode(src, format) {
     var hdr = new IOStream("", 0, 10);
-    hdr.WriteByte(order);
-    hdr.WriteUint7(src.length);
+    hdr.WriteByte(format);
 
-    if (order == 0) {
+    var order = format & 1
+    var x4    = format & 8
+    var nosz  = format & 16
+    var cat   = format & 32
+    var rle   = format & 64
+    var pack  = format & 128
+
+    if (!nosz)
+	hdr.WriteUint7(src.length);
+
+    if (x4)
+	return Buffer.concat([hdr.buf.slice(0, hdr.pos), RansEncodeX4(hdr, src)])
+
+    var pack_meta = new Buffer.alloc(0)
+    if (pack)
+	[pack_meta, src] = EncodePack(src)
+
+    var rle_meta = new Buffer.alloc(0)
+    if (rle)
+	[rle_meta, src] = EncodeRLE(src)
+
+    if (cat)
+	var comp = src
+    else if (order == 0)
 	var comp = RansEncode0(src)
-    } else {
+    else
 	var comp = RansEncode1(src)
-    }
 
-    return Buffer.concat([hdr.buf.slice(0,hdr.pos), comp])
+    return Buffer.concat([hdr.buf.slice(0,hdr.pos), pack_meta, rle_meta, comp])
 }
 
 //----------------------------------------------------------------------
