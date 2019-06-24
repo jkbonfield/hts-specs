@@ -145,19 +145,139 @@ function DecodeRLE(buf, rle_meta, len) {
 }
 
 //----------------------------------------------------------------------
+// Bit packing
+
+// Pack meta data is the number and value of distinct symbols plus
+// the length of the packed byte stream.
+function DecodePackMeta(src) {
+    var nsym = src.ReadByte()
+    var P = new Array(nsym)
+
+    for (var i = 0; i < nsym; i++)
+	P[i] = src.ReadByte()
+
+    var len = src.ReadUint7()
+
+    return [P, nsym, len]
+}
+
+// Extract bits from src producing output of length len.
+// Nsym is number of distinct symbols used.
+function DecodePack(data, P, nsym, len) {
+    var out = new Buffer.allocUnsafe(len)
+    var j = 0;
+
+    // Constant value
+    if (nsym <= 1) {
+	for (var i = 0; i < len; i++)
+	    out[i] = P[0]
+    }
+
+    // 1 bit per value
+    else if (nsym <= 2) {
+	for (i = 0; i < len; i++) {
+	    if (i % 8 == 0)
+		var v = data[j++];
+
+	    out[i] = P[v & 1]
+	    v >>= 1
+	}
+    }
+
+    // 2 bits per value
+    else if (nsym <= 4) {
+	for (i = 0; i < len; i++) {
+	    if (i % 4 == 0)
+		var v = data[j++];
+
+	    out[i] = P[v & 3]
+	    v >>= 2
+	}
+    }
+
+    // 4 bits per value
+    else if (nsym <= 16) {
+	for (i = 0; i < len; i++) {
+	    if (i % 2 == 0)
+		var v = data[j++];
+
+	    out[i] = P[v & 15]
+	    v >>= 1
+	}
+    }
+
+    return out
+}
+
+
+//----------------------------------------------------------------------
+// 4 way interleaving.
+// This is simply 4 rANS streams interleaved to form bytes 0,4,8...,
+// 1,5,9..., 2,6,10... and 3,7,11...
+//
+// It works well when the distributions differ for each of the 4 bytes,
+// for example when compressing a series of 32-bit integers.
+//
+// Maybe make this more general purpose of X* where we specify the stripe
+// size instead of fixing it at 4?
+function RansDecodeX4(src, len) {
+    var clen = new Array(4)
+    for (i = 0; i < 4; i++)
+	clen[i] = src.ReadUint7()
+
+    var X0 = RansDecodeStream(src, (len/4)>>0)
+    var X1 = RansDecodeStream(src, (len/4)>>0)
+    var X2 = RansDecodeStream(src, (len/4)>>0)
+    var X3 = RansDecodeStream(src, (len/4)>>0)
+
+    var out = new Buffer.allocUnsafe(len)
+    var i = 0
+    for (var j = 0; j < len/4; j++) {
+	out[i+0] = X0[j];
+	out[i+1] = X1[j];
+	out[i+2] = X2[j];
+	out[i+3] = X3[j];
+	i += 4;
+    }
+
+    return out;
+}
+
+
+//----------------------------------------------------------------------
+// Uncompressed data, aka "cat"
+function RansDecodeCat(src, len) {
+    var out = new Buffer.allocUnsafe(len)
+    for (var i = 0; i < len; i++)
+	out[i] = src.ReadByte()
+
+    return out
+}
+
+
+//----------------------------------------------------------------------
 // Main rANS entry function: decodes a compressed src and
 // returns the uncompressed buffer.
 function decode(src) {
-    var stream = new IOStream(src);
+    var stream = new IOStream(src)
+    return RansDecodeStream(stream, 0)
+
     var format = stream.ReadByte();
     var n_out = stream.ReadUint7();
 
     var order = format & 1
-    var rle   = format & 64;
+    var rle   = format & 64
+    var pack  = format & 128
+
+    // Bit packing
+    if (pack) {
+	var pack_len = n_out
+	var [P, nsym, n_out] = DecodePackMeta(stream)
+    }
 
     // Run length encoding
     if (rle) {
-	var expanded_len = n_out
+	var rle_len = n_out
 	var [rle_meta, n_out] = DecodeRLEMeta(stream)
     }
 
@@ -169,9 +289,59 @@ function decode(src) {
     }
 
     // Apply expansion transforms
-    if (rle) {
-	buf = DecodeRLE(buf, rle_meta, expanded_len);
+    if (rle)
+	buf = DecodeRLE(buf, rle_meta, rle_len)
+
+    if (pack)
+	buf = DecodePack(buf, P, nsym, pack_len)
+
+    return buf
+}
+
+function RansDecodeStream(stream, n_out) {
+    var format = stream.ReadByte();
+    var order  = format & 1
+    var x4     = format & 8
+    var nosz   = format & 16
+    var cat    = format & 32
+    var rle    = format & 64
+    var pack   = format & 128
+
+    if (!nosz)
+	n_out = stream.ReadUint7();
+
+    // 4 way interleaving
+    if (x4)
+	return RansDecodeX4(stream, n_out)
+
+    if (cat)
+	return RansDecodeCat(stream, n_out)
+
+    // Bit packing
+    if (pack) {
+	var pack_len = n_out
+	var [P, nsym, n_out] = DecodePackMeta(stream)
     }
+
+    // Run length encoding
+    if (rle) {
+	var rle_len = n_out
+	var [rle_meta, n_out] = DecodeRLEMeta(stream)
+    }
+
+    // Uncompress data (all, packed or run literals)
+    if (order == 0) {
+	var buf = RansDecode0(stream, n_out)
+    } else {
+	var buf = RansDecode1(stream, n_out)
+    }
+
+    // Apply expansion transforms
+    if (rle)
+	buf = DecodeRLE(buf, rle_meta, rle_len)
+
+    if (pack)
+	buf = DecodePack(buf, P, nsym, pack_len)
 
     return buf
 }
