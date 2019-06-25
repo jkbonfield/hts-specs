@@ -159,16 +159,8 @@ function DecodeRLEMeta(src) {
 	rle_meta = RansDecode0(new IOStream(rle_meta), u_meta_len/2)
     }
 
-    return [rle_meta, rle_len]
-}
-
-function DecodeRLE(buf, rle_meta, len) {
-    var src = new IOStream(buf);
-    var rle_meta = new IOStream(rle_meta)
-
-    var out = new Buffer.allocUnsafe(len)
-
     // Decode list of symbols for which RLE lengths are applied
+    var rle_meta = new IOStream(rle_meta)
     var L = new Array(256)
     var n = rle_meta.ReadByte()
     if (n == 0)
@@ -176,7 +168,13 @@ function DecodeRLE(buf, rle_meta, len) {
     for (var i = 0; i < n; i++)
 	L[rle_meta.ReadByte()] = 1
 
-    //return buf
+    return [L, rle_meta, rle_len]
+}
+
+function DecodeRLE(buf, L, rle_meta, len) {
+    var src = new IOStream(buf);
+
+    var out = new Buffer.allocUnsafe(len)
 
     // Expand up buf+meta to out; i = buf index, j = out index
     var j = 0;
@@ -445,7 +443,7 @@ function RansDecodeStream(stream, n_out) {
     // Run length encoding
     if (rle) {
 	var rle_len = n_out
-	var [rle_meta, n_out] = DecodeRLEMeta(stream)
+	var [L, rle_meta, n_out] = DecodeRLEMeta(stream)
     }
 
     // Uncompress data (all, packed or run literals)
@@ -458,7 +456,7 @@ function RansDecodeStream(stream, n_out) {
 
     // Apply expansion transforms
     if (rle)
-	buf = DecodeRLE(buf, rle_meta, rle_len)
+	buf = DecodeRLE(buf, L, rle_meta, rle_len)
 
     if (pack)
 	buf = DecodePack(buf, P, nsym, pack_len)
