@@ -66,7 +66,12 @@ module.exports = class RangeCoderGen {
 	this.stream = new IOStream("", 0, src.length*1.1 + 100); // guestimate worst case!
 
 	this.stream.WriteByte(flags);
-	this.stream.WriteUint7(src.length);
+	if (!(flags & ARITH_NOSIZE))
+	    this.stream.WriteUint7(src.length);
+
+	if (flags & ARITH_X4)
+	    return Buffer.concat([this.stream.buf.slice(0, this.stream.pos),
+				  this.encodeX4(this.stream, src)])
 
 	var order = flags & ARITH_ORDER;
 	var e_len = src.length;
@@ -542,6 +547,47 @@ module.exports = class RangeCoderGen {
 
     //----------------------------------------------------------------------
     // X4 method
+    encodeX4(hdr, src) {
+	var stride = 4
+	if (src.length % stride != 0) {
+	    console.error("Input data is not a size multiple of", stride)
+	    return
+	}
+
+	// Split into multiple streams
+	var ulen = src.length / stride
+	var j = 0
+	var part = new Array(stride)
+	for (var s = 0; s < stride; s++)
+	    part[s] = new Array(ulen)
+	for (var i = 0; i < src.length; i+=stride) {
+	    for (var s = 0; s < stride; s++)
+		part[s][j] = src[i+s]
+	    j++
+	}
+
+	// Compress each part
+	var comp = new Array(stride)
+	var total = 0
+	for (var s = 0; s < stride; s++) {
+	    // Example: try O0 and O1 and choose best
+	    var comp0 = this.encode(part[s], 0)
+	    var comp1 = this.encode(part[s], 1)
+	    comp[s] = (comp1.length < comp0.length) ? comp1 : comp0
+	    total += comp[s].length
+	}
+
+	// Serialise
+	var out = new IOStream("", 0, total+5*stride)
+	for (var s = 0; s < stride; s++)
+	    out.WriteUint7(comp[s].length)
+
+	for (var s = 0; s < stride; s++)
+	    out.WriteData(comp[s], comp[s].length)
+
+	return out.buf.slice(0, out.buf.pos)
+    }
+
     decodeX4(stream, len) {
 	var plen = len/4
 	
