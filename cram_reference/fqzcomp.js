@@ -16,42 +16,40 @@ const RangeCoder = require("./arith_sh");
 // returns the uncompressed buffer.
 
 function read_array(src, tab, size) {
-    var i = 0; // array value
-    var j = 0; // array index: tab[j]
+    var j = 0; // array value
+    var z = 0; // array index: tab[j]
     var last = -1;
-    var r2 = 0;
 
-    while (j < size) {
-	if (r2) {
-	    var run_len = last
-	} else {
-	    var run_len = 0;
-	    var loop = 0;
-	    do {
-		var r = src.ReadByte()
-		if (++loop == 3) {
-		    run_len += r*255;
-		    r = 255; // FIXME?
-		} else {
-		    run_len += r;
-		}
-	    } while (r == 255)
-	}
+    // Remove first level of run-length encoding
+    var R = new Array(1024) // runs
+    while (z < size) {
+	var run = src.ReadByte()
+	R[j++] = run
+	z += run
 
-	if (r2 == 0 && run_len == last) {
-	    r2 = src.ReadByte();
-	} else {
-	    if (r2)
-		r2--;
-	    last = run_len;
+	if (run == last) {
+	    var copy = src.ReadByte()
+	    z += run * copy
+	    while (copy--)
+		R[j++] = run
 	}
+	last = run
+    }
 
-	while (run_len && j < size) {
-	    run_len--;
-	    tab[j++] = i
-	}
+    // Now expand runs in R to tab, noting 255 is max run
+    var i = 0
+    j = 0
+    z = 0
+    while (z < size) {
+	var run_len = 0
+	do {
+	    var part = R[j++]
+	    run_len += part
+	} while (part == 255)
 	
-	i++;
+	while (run_len--)
+	    tab[z++] = i;
+	i++
     }
 }
 
@@ -669,8 +667,8 @@ function encode_fqz_params(out, params, qhist, qtab, ptab, dtab, stab) {
 }
 
 function encode_fqz(out, src, q_lens, q_dirs, params, qhist, qtab, ptab, dtab, stab) {
-    //console.log("0:",params[0])
-    //console.log("1:",params[1])
+    //console.error("0:",params[0])
+    //console.error("1:",params[1])
 
     var max_sel = 1<<params[0].sbits
     if (max_sel > 0) max_sel--
