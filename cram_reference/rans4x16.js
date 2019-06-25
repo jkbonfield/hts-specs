@@ -329,7 +329,7 @@ function DecodePack(data, P, nsym, len) {
 		var v = data[j++];
 
 	    out[i] = P[v & 15]
-	    v >>= 1
+	    v >>= 4
 	}
     }
 
@@ -349,8 +349,10 @@ function DecodePack(data, P, nsym, len) {
 // size instead of fixing it at 4?
 function RansEncodeX4(hdr, src) {
     var stride = 4
-    if (src.length % stride != 0)
+    if (src.length % stride != 0) {
+	console.error("Input data is not a size multiple of", stride)
 	return
+    }
 
     // Split into multiple streams
     var ulen = src.length / stride
