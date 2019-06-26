@@ -16,6 +16,9 @@ module.exports = class IOStream {
 
     // ----------
     // Reading
+    EOF() {
+	return this.pos >= this.length
+    }
 
     ReadData(len) {
 	var A = this.buf.slice(this.pos, this.pos+len)
@@ -29,6 +32,12 @@ module.exports = class IOStream {
 	return b
     }
 
+    ReadChar() {
+	const b = this.buf[this.pos]
+	this.pos++
+	return String.fromCharCode(b)
+    }
+
     ReadUint16() {
 	var i = this.ReadByte()
 	i |= this.ReadByte()<<8
@@ -39,6 +48,17 @@ module.exports = class IOStream {
 	const i = this.buf.readInt32LE(this.pos)
 	this.pos += 4
 	return i
+    }
+
+    // nul terminated string
+    ReadString() {
+	var s = ""
+	do {
+	    var b = this.buf[this.pos++]
+	    if (b)
+		s += String.fromCharCode(b)
+	} while (b)
+	return s
     }
 
 //    ReadUint7() {

@@ -37,7 +37,7 @@ if (!argv.d) {
     while (pos < buf.length) {
 	var len = buf.readInt32LE(pos);
 	pos += 4;
-	var buf2 = tok3.decode(buf.slice(pos, pos+len));
+	var buf2 = tok3.decode(buf.slice(pos, pos+len), len);
 	process.stdout.write(buf2)
 	out_len += buf2.length;
 	pos += len;

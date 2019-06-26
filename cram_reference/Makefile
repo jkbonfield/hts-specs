@@ -83,14 +83,15 @@ test_tok3:
 	@echo === Checking tok3
 	@for i in htscodecs-corpus/names/tok3/*; do \
             echo $$i;\
-	    base=`echo $$i | sed 's/\.[0-9]*$$//;s#/q#/../q#'`; \
+	    base=`echo $$i | sed 's/\.[0-9]*$$//;s#/tok3##'`; \
 	    level=`echo $$i | sed 's/.*\.//'`;\
 	    # Decode predefined data set\
 	    a=`${NODE} ${NODE_OPTS} main_tok3 -d $$i 2>/dev/null | md5sum`; \
-	    b=`tr '\012' '\000' < $$base | md5sum`; \
+	    b=`cat $$base | md5sum`; \
 	    test "$$a" = "$$b" || echo $<: Mismatch for $$i; \
-	    # Round trip. \
-	    ${NODE} ${NODE_OPTS} main_tok3.js -l $$level $$base 2>/dev/null > _; \
-	    a=`${NODE} ${NODE_OPTS} main_tok3 -d _ 2>/dev/null | md5sum`; \
-	    test "$$a" = "$$b" || echo $<: Fail round-trip for $$base with level $$level; \
 	done
+
+#	    # Round trip. \
+#	    ${NODE} ${NODE_OPTS} main_tok3.js -l $$level $$base 2>/dev/null > _; \
+#	    a=`${NODE} ${NODE_OPTS} main_tok3 -d _ 2>/dev/null | md5sum`; \
+#	    test "$$a" = "$$b" || echo $<: Fail round-trip for $$base with level $$level; \
