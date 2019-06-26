@@ -32,18 +32,18 @@ module.exports = class RangeCoderGen {
 	if (flags & ARITH_X4)
 	    return this.decodeX4(this.stream, n_out)
 
-	// NOP, useful for tiny blocks
-	if (flags & ARITH_CAT)
-	    return this.decodeCat(this.stream, n_out)
-
 	// Meta data
 	if (flags & ARITH_PACK) {
 	    var P
 	    [P, e_len] = this.decodePackMeta(this.stream)
 	}
 
+	// NOP, useful for tiny blocks
+	if (flags & ARITH_CAT)
+	    var data = this.decodeCat(this.stream, e_len)
+
 	// Entropy decode
-	if (flags & ARITH_EXT) {
+	else if (flags & ARITH_EXT) {
 	    var data = this.decodeExt(this.stream, e_len)
 	} else if (flags & ARITH_RLE) {
 	    var data = order
@@ -599,7 +599,7 @@ module.exports = class RangeCoderGen {
 	var X1 = this.decodeStream(stream, plen)
 	var X2 = this.decodeStream(stream, plen)
 	var X3 = this.decodeStream(stream, plen)
-	
+
 	var out = new Buffer.allocUnsafe(len);
 	for (var i = 0, j = 0; j < plen; j++) {
 	    out[i+0] = X0[j]
