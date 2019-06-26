@@ -152,7 +152,7 @@ function DecodeRLEMeta(src) {
 
     // Decode RLE lengths
     if (u_meta_len & 1) {
-	var rle_meta = src.ReadData(u_meta_len/2)
+	var rle_meta = src.ReadData((u_meta_len-1)/2)
     } else {
 	var comp_meta_len = src.ReadUint7()
 	var rle_meta = src.ReadData(comp_meta_len)
