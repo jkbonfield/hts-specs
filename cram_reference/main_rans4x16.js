@@ -7,7 +7,7 @@ var rans = require("./rans4x16");
 var argv = require('minimist')(process.argv.slice(2), { boolean: "d" });
 
 if (argv._.length != 1) {
-    process.stderr.write("Usage: node main_rans.js [-d] [-o order] input-file > output-file\n");
+    processf.stderr.write("Usage: node main_rans4x16.js [-d] [-o order] input-file > output-file\n");
     process.exit(1);
 }
 
