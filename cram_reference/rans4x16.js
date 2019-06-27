@@ -71,7 +71,8 @@ function RansEncFlush(R, dst) {
 }
 
 function RansEncRenorm(R, dst, freq, scale_bits) {
-    var R_max = (((1 << 15) >> scale_bits) << 16) * freq;
+    //var R_max = (((1 << 15) >> scale_bits) << 16) * freq;
+    var R_max = (1 << (31-scale_bits)) * freq
 
     while (R >= R_max) {
 	dst.WriteByteNeg((R>>8) & 0xff);
@@ -211,7 +212,7 @@ function EncodePack(src) {
 	    P[i] = nsym++
 
     if (nsym > 16) {
-	console.error("Too many symbols to pack:",nsym)
+	//console.error("Too many symbols to pack:",nsym)
 	return
     }
 
@@ -488,6 +489,12 @@ function encode(src, format) {
     var rle_meta = new Buffer.alloc(0)
     if (rle)
 	[rle_meta, src] = EncodeRLE(src)
+
+    if (src.length < 4 && order == 1) {
+	// Protect against short order-1 data due to RLE/Pack
+	order = 0
+	hdr.buf[0] &= ~1
+    }
 
     if (cat)
 	var comp = src
@@ -782,7 +789,7 @@ function ReadFrequencies1(src, F, C) {
 function RansDecode1(src, nbytes) {
     // FIXME: this bit is missing from the RansDecode0 pseudocode.
 
-    var comp = src.ReadByte(); // FIXME: discard compressed vs uncompressed header
+    var comp = src.ReadByte();
     var freq_src = src
     if (comp) {
 	var ulen = src.ReadUint7()
@@ -859,6 +866,7 @@ function BuildFrequencies1(src, F, F0) {
 	F[last][src[i]]++;
 	last = src[i];
     }
+    F0[last]++;
 
     // Also accept we'll be starting at 4 points, not just byte 0
     F[0][src[1*(src.length >> 2)]]++;
