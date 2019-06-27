@@ -134,6 +134,16 @@ module.exports = class IOStream {
 	this.buf[this.pos++] = b
     }
 
+    WriteChar(b) {
+	this.buf[this.pos++] = b.charCodeAt(0)
+    }
+
+    WriteString(str) {
+	for (var i = 0; i < str.length; i++)
+	    this.buf[this.pos++] = str.charCodeAt(i)
+	this.buf[this.pos++] = 0
+    }
+
     WriteData(buf, len) {
 	for (var i = 0; i < len; i++)
 	    this.buf[this.pos++] = buf[i]

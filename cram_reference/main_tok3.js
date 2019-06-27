@@ -4,10 +4,10 @@
 
 var fs = require("fs");
 var tok3 = require("./tok3");
-var argv = require('minimist')(process.argv.slice(2), { boolean: "d" });
+var argv = require('minimist')(process.argv.slice(2), { boolean: ["d","a"] });
 
 if (argv._.length != 1) {
-    process.stderr.write("Usage: node main_tok3.js [-d] [-o order] input-file > output-file\n");
+    process.stderr.write("Usage: node main_tok3.js [-a] [-d] input-file > output-file\n");
     process.exit(1);
 }
 
@@ -17,11 +17,10 @@ var buf = fs.readFileSync(filein);
 var blk_size = 1024*1024;
 
 if (!argv.d) {
-    var order = argv.o != undefined ? argv.o : 0;
     var pos = 0;
     var out_len = 0;
     while (pos < buf.length) {
-	var buf2 = tok3.encode(buf.slice(pos, pos+blk_size), order);
+	var buf2 = tok3.encode(buf.slice(pos, pos+blk_size), argv.a);
 	var header = new Buffer.allocUnsafe(4);
 	header.writeInt32LE(buf2.length, 0);
 	process.stdout.write(header)
@@ -29,7 +28,7 @@ if (!argv.d) {
 	pos += blk_size;
 	out_len += buf2.length+4;
     }
-    process.stderr.write("Compress order "+order+", "+buf.length+" => " + out_len + "\n");
+    process.stderr.write("Compress "+buf.length+" => " + out_len + "\n");
 
 } else {
     var pos = 0;
