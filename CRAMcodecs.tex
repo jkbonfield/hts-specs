@@ -131,7 +131,7 @@ clear.
 
 The exception to the above is occasionally we need to have multiple
 instances of a particular data type, such as Order-1 decoding will
-have many models.  Here we do we an object oriented way of describing
+have many models.  Here we use an object oriented way of describing
 the problem with $instance$.\textsc{Function} notation.
 
 \subsection{Mathematical operators}
@@ -142,7 +142,7 @@ the problem with $instance$.\textsc{Function} notation.
 \hline
 $a = b$       & Compares $a$ and $b$ variables, yielding true if they match, false otherwise\\
 $a \gets b$   & Assigns value of $b$ to variable $a$\\
-$a \shiftr b$ & Bit-wise left shift $a$ by $b$ bits, shifting in zeros \\
+$a \shiftl b$ & Bit-wise left shift $a$ by $b$ bits, shifting in zeros \\
 $a \shiftr b$ & Bit-wise right shift $a$ by $b$ bits, shifting in zeros \\
 $a \bitand b$ & Bit-wise AND operator, joining values $a$, $b$\\
 $a \bitor b$  & Bit-wise OR operator, joining values $a$, $b$\\
@@ -757,11 +757,11 @@ This is correct, but it is unfortunately a design oversight.
 
 CRAM version 3.1 defines an additional rANS entropy encoder, using
 16-bit renormalisation instead of the 8-bit used in CRAM 3.0 and with
-inbuilt bit-packing and run-length encoding.  The Order-1 entropy
+inbuilt bit-packing and run-length encoding.  The Order-1 rANS 4x16
 encoder has also been modified to use a maximum frequency of 1024
 instead of 4096.  This offers better cache performance for the large
 Order-1 tables and usually has minimal impact on compression ratio.
-(The old rANS entropy encoder is still available if the reduced
+(The 4x8 rANS entropy encoder is still available if the reduced
 frequency range is a problem.)
 
 Frequencies are now stored using uint7 format instead of ITF8.  The
@@ -852,7 +852,7 @@ for each context.
 \EndProcedure
 \end{algorithmic}
 
-The Order-1 frequencies have also store the complete alphabet of
+The Order-1 frequencies also store the complete alphabet of
 observed symbols (ignoring context) followed by a table of frequencies for
 each symbol in the alphabet.  Given many frequencies will be zero
 where a symbol is present in one context but not in others, all zero
