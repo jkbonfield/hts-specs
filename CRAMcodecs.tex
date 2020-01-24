@@ -140,6 +140,12 @@ the problem with $instance$.\textsc{Function} notation.
 \hline
 \textbf{Operator} & \textbf{Description}\\
 \hline
+$a + b$       & Addition \\
+$a - b$       & Subtraction \\
+$a \times b$  & Multiplication \\
+$a\ /\ b$     & Floating point division $a/b$\\
+$a \bdiv b$   & Integer division $a/b$, equivalent to $\lfloor{a/b}\rfloor$\\
+$a \bmod b$   & Integer modulo (remainder) $a - b\times(a \bdiv b)$\\
 $a = b$       & Compares $a$ and $b$ variables, yielding true if they match, false otherwise\\
 $a \gets b$   & Assigns value of $b$ to variable $a$\\
 $a \shiftl b$ & Bit-wise left shift $a$ by $b$ bits, shifting in zeros \\
@@ -148,9 +154,6 @@ $a \bitand b$ & Bit-wise AND operator, joining values $a$, $b$\\
 $a \bitor b$  & Bit-wise OR operator, joining values $a$, $b$\\
 $a \logor b$  & Logical OR operator, joining expressions $a$, $b$\\
 $a \logand b$ & Logical AND operator, joining expressions $a$, $b$\\
-$a\ /\ b$     & Floating point division $a/b$\\
-$a \bdiv b$   & Integer division $a/b$\\
-$a \bmod b$   & Integer modulo (remainder) $a - b*(a/b)$\\
 $a \concat b$ & String concatenation of $a$ and $b$: $ab$.\\
 $V_i$         & Element $i$ of vector $V$.\\
               & The entire vector $V$ may be passed into a function.\\
@@ -1172,8 +1175,8 @@ data as described above.
 \end{algorithmic}
 
 
-\subsection{rANS 4x16 with 4-way interleaving}
-\label{sec:ransX4}
+\subsection{rANS 4x16 with N-way interleaving / striping}
+\label{sec:ransstripe}
 
 If we have a series of 32-bit values, we can get better compression by
 treating it as a series of 4 8-bit values representing the first to
@@ -1181,34 +1184,142 @@ last bytes in each 32-bit word, than we can by simply processing it as
 a stream of 8-bit values.
 Each $4{th}$ byte is sent to its own stream producing 4 interleaved streams, so the $1^{st}$ stream will hold data from byte 0, 4, 8, etc while the $2^{nd}$ stream will hold data from byte 1, 5, 9, etc.
 Each of those four streams is then itself compressed using this compression format.
-For example an input block of small unsigned 32-bit little-endian numbers may use RLE for the first three streams as they are mostly zero, and a non-RLE Order-0 entropy encoder of the last stream.
-Normally our data format will include the decoded size, but with X4 we can omit this from the internal four compressed streams as we know they will each be a quarter of the outer stream.
 
-The byte stream consists of a 7-bit encoded uncompressed length, which
-must be a multiple of 4, followed by 4 compressed lengths also 7-bit
-encoded.  Each of these compressed byte streams is then itself a valid
-$cdata$ stream and will recurse again, each starting with their own
-format flag.  The total uncompressed byte stream is then an
-interleaving of one byte in turn from each of the 4 substreams (in
-order of 1st to 4th).
+For example an input block of small unsigned 32-bit little-endian numbers may use RLE for the first three streams as they are mostly zero, and a non-RLE Order-0 entropy encoder of the last stream.
+
+In the general case we describe this as $N$-way interleaved streams.
+We can consider this interleaving process to be equivalent to a table
+transpose of $M$ rows by $N$ columns to $N$ rows by $M$ columns,
+followed by compressing each $N$ row independently.
+
+The byte stream consists of a 7-bit encoded uncompressed combined
+length, a byte holding the value of $N$, followed by $N$ compressed
+lengths also 7-bit encoded.  Finally the data sub-streams themselves,
+each a valid $cdata$ stream, follow.
+
+Normally our $cdata$ format will include the decoded size, but with
+\textsc{Stripe} we can omit this from the internal compressed sub-streams
+as given the total length we know how to compute the sub-lengths.
+
+Reproducing the original uncompressed data involves decoding the $N$
+sub-streams and interleaving them together again (reversing the table
+transpose).  The uncompressed data length may not necessary be an exact
+multiple of $N$, in which case the latter uncompressed sub-streams may
+be 1 byte shorter.
+
+As an example starting with input data $D$ we define the transposed data $T$ as:
+
+\hspace{1cm}
+$D = aA\underline{A}bB\underline{B}cC\underline{C}dD\underline{D}e$
+
+\hspace{1cm}
+$T = [\ abcde,\ ABCD,\ \underline{A}\underline{B}\underline{C}\underline{D}\ ]$
+
+Note our example data is not a multiple of $N$ long, missing
+$E\underline{E}$, which gives $T$ fragments of length [5, 4, 4].
+
+If $D_i$ is the $i^{th}$ character in $D$ and $T_{j,i}$ is the
+$i^{th}$ character of the $j^{th}$ substring in $T$, transformations
+between $D$ and $T$ are defined as:
+
+\hspace{1cm}
+$T_{j,i} = D_{i N +j}$
+
+\hspace{1cm}
+$D_i = T_{(i \bmod N),\ (i \bdiv N)}$
+
+
+% Example:
+% echo -n aA0bB1cC2dD3eE | perl -e '@D=split("",<>); $L=scalar(@D);$N=3;for($j=0;$j<$N;$j++) {for($i=0;$i<$L/$N;$i++){$R[$j][$i]=$D[$i*$N + $j]}} print @{$R[0]}," ",@{$R[1]}, " ", @{$R[2]},"\n";for($i=0;$i<$L;$i++){$T[$i]=$R[$i%$N][$i/$N]} print @T,"\n"'
+
+
+% ---
+% Alternative phrasing, transform D to R as a single strings both L
+% long, rather than R being a collection of N strings of length L/N.
+%
+% This can be considered as a data rotation by stride size $N$.  For
+% example the string $D$ with stride $N = 3$ could be rotated to form
+% string $R$ (spacing added for clarity only):
+%
+% \hspace{1cm}
+% $D = $aA\underline{A} bB\underline{B} cC\underline{C} dD\underline{D} eE\underline{E} 
+%
+% \hspace{1cm}
+% $R = $abcde ABCDE \underline{A}\underline{B}\underline{C}\underline{D}\underline{E}
+%
+% The 3 portions of $R$ can then be individually compressed using their
+% own rANS frequency tables for potentially better compression ratio.
+%
+% With data length $L$ being an exact multiple of stride $N$ the
+% sub-strings each have an identical sub-length $S$ of $L/N$
+% ($S = [5, 5, 5]$ in the above example).  If the data $D$ is not a multiple
+% of $N$, some later fragments may be 1 character shorter.  For example:
+%
+% \hspace{1cm}
+% $D = $aA\underline{A} bB\underline{B} cC\underline{C} dD\underline{D}  e
+%
+% \hspace{1cm}
+% $R = $abcde ABCD \underline{A}\underline{B}\underline{C}\underline{D}
+%
+% These sub-lengths $S$ and their cumulative lengths $C$ can be computed via:
+%
+% \hspace{1cm}
+% $S_i = \left\lfloor{}\frac{L}{N}\right\rfloor{} + ((L \bmod N) > i)$
+% \quad $\forall{i < N}$
+%
+% \hspace{1cm}
+% $C_0 = 0$ \quad\quad $C_{i+1} = S_i + C_i$
+%
+% In the definition of $S_i$ above, the $>$ symbol is being used as a
+% boolean operator that evaluates to 0 (false) or 1 (true).
+% For example a string of length $L = 13$ and stride size $N = 3$ gives $S =
+% [5, 4, 4]$ and $C = [0, 5, 9, 13]$.
+
+%% L multiple of N case below:
+%%
+%% A data $D$ of length $L$ being a multiple of $N$ can be rotated to
+%% form $N$ fragments, producing a new data $R$ and back again via:
+%%
+%% \hspace{1cm}
+%% $R_i = D_{((i \times N)\bmod L) + \frac{i}{L/N}}$
+%%
+%% \hspace{1cm}
+%% $D_i = R_{((i \times \frac{L}{N})\bmod L) + \lfloor\frac{i}{N}\rfloor}$
+
+%These cumulative lengths may be used to unrotate $R$ to form the
+%original data $D$:
+%
+%\hspace{1cm}
+%$D_i = R_{\lfloor\frac{i}{n}\rfloor + C_{(i \bmod N)}}$
+
+% % echo -n abcde0123ABCD \
+% % | perl -e 'use POSIX qw/ceil floor/;$/=undef;@R=split("",<>);$N=3;$L=scalar(@R);for ($i=0;$i<$N;$i++) {$S[$i]=floor($L/$N) + (($L % $N)>$i)}; $C[0]=0;for ($i=0;$i<$N;$i++) {$C[$i+1]=$C[$i]+$S[$i]} for ($i=0;$i<$L;$i++) {$T[$i]=$R[$C[$i%$N] + floor($i/$N)]};print @T,"\n"'
+% %
+% % => aA0bB1cC2dD3e
+
+
+\vskip 0.5cm
 
 \begin{algorithmic}[1]
-\Function{RansDecodeX4}{$len$}
-  \For{$i \gets 0$ to $3$} \Comment{Fetch 4 compressed lengths}
-    \State $clen_i \gets $\Call{ReadUint7}{}
+\Function{RansDecodeStripe}{$len$}
+  \State $N \gets $\Call{ReadUint8}{}
+  \For{$j \gets 0$ to $N$} \Comment{Fetch N compressed lengths}
+    \State $clen_j \gets $\Call{ReadUint7}{}
   \EndFor
-  \State $X0 \gets $\Call{RansDecode4x16}{$len / 4$} \Comment{Decode 4 streams}
-  \State $X1 \gets $\Call{RansDecode4x16}{$len / 4$}
-  \State $X2 \gets $\Call{RansDecode4x16}{$len / 4$}
-  \State $X3 \gets $\Call{RansDecode4x16}{$len / 4$}
   \Statex
-  \State $i \gets 0$
-  \For{$j \gets 0$ to $len / 4 - 1$} \Comment{Interleave}
-    \State $out_{i+0} \gets X0_j$
-    \State $out_{i+1} \gets X1_j$
-    \State $out_{i+2} \gets X2_j$
-    \State $out_{i+3} \gets X3_j$
-    \State $i \gets i+4$
+  \For{$j \gets 0$ to $N$} \Comment{Decode N streams}
+    \State $ulen_j \gets (len \bdiv N) + ((len \bmod N) > j)$
+\Comment{$(x > y)$ expression being 1 if true, 0 if false}
+    \State $T_j \gets $\Call{RansDecode4x16}{$ulen_j$}
+  \EndFor
+  \Statex
+%  \For{$i \gets 0$ to $len - 1$} \Comment{Interleave}
+%    \State $out_i \gets T_{(i \bmod N),\ (i \bdiv N)}$
+%  \EndFor
+  \For{$j \gets 0$ to $N - 1$} \Comment{Interleave}
+    \For{$i \gets 0$ to $ulen_j - 1$}
+      \State $out_{i \times N + j} \gets T_{j,i}$
+    \EndFor
   \EndFor
   \State \Return $out$
 \EndFunction
@@ -1219,6 +1330,16 @@ order of 1st to 4th).
 We combine the Order-0 and Order-1 rANS 4x16 encoder with optional
 run-length encoding, bit-packing and four-way interleaving into a
 single data stream.
+
+% Discussion:
+%
+% We could move clen[] to the top of this so the format itself starts
+% with the length of the compressed byte stream.  This removes it from
+% STRIPE
+%
+% This then permits concatenation of rANS streams so we permit
+% multiple blocks, bringing it into line with gzip, bzip2, lzma, etc
+% which all permit this.
 
 \begin{table}[h]
 \centering
@@ -1236,38 +1357,33 @@ single data stream.
 \cline{2-5}
 
 \multicolumn{6}{|l|}{}\\[-0.3em]
-\multicolumn{6}{|l|}{\textit{If \textsc{X4} flag is set:} } \\
+\multicolumn{6}{|l|}{\textit{If \textsc{Stripe} flag is set:} } \\
 \cline{2-5}
-& ? & uint7 & clen1 & Compressed sub-block length 1 & \\
-& ? & uint7 & clen2 & Compressed sub-block length 2 & \\
-& ? & uint7 & clen3 & Compressed sub-block length 3 & \\
-& ? & uint7 & clen4 & Compressed sub-block length 4 & \\
-& ? & uint8[] & cdata1 & Compressed data sub-block 1 (recurse) & \\
-& ? & uint8[] & cdata2 & Compressed data sub-block 2 (recurse) & \\
-& ? & uint8[] & cdata3 & Compressed data sub-block 3 (recurse) & \\
-& ? & uint8[] & cdata4 & Compressed data sub-block 4 (recurse) & \\
+& ? & uint8 & N & Number of sub-streams & \\
+& ? & uint7[] & clen[] & N copies of compressed sub-block length & \\
+& ? & uint8[] & cdata[] & N copies of Compressed data sub-block (recurse) & \\
 \cline{2-5}
 
 \multicolumn{6}{|l|}{}\\[-0.7em]
-\multicolumn{6}{|l|}{\textit{If \textsc{Cat} flag is set (and \textsc{X4} flag is unset):} } \\
+\multicolumn{6}{|l|}{\textit{If \textsc{Cat} flag is set (and \textsc{Stripe} flag is unset):} } \\
 \cline{2-5}
 & ? & uint8[] & udata & Uncompressed data stream & \\
 \cline{2-5}
 
 \multicolumn{6}{|l|}{}\\[-0.7em]
-\multicolumn{6}{|l|}{\textit{If \textsc{Pack} flag is set (and neither \textsc{X4} or \textsc{Cat} flags are set):} } \\
+\multicolumn{6}{|l|}{\textit{If \textsc{Pack} flag is set (and neither \textsc{Stripe} or \textsc{Cat} flags are set):} } \\
 \cline{2-5}
 & ? & uint8[] & pack\_meta & Pack lookup table & \\
 \cline{2-5}
 
 \multicolumn{6}{|l|}{}\\[-0.7em]
-\multicolumn{6}{|l|}{\textit{If \textsc{RLE} flag is set (and neither \textsc{X4} or \textsc{Cat} flags are set):} } \\
+\multicolumn{6}{|l|}{\textit{If \textsc{RLE} flag is set (and neither \textsc{Stripe} or \textsc{Cat} flags are set):} } \\
 \cline{2-5}
 & ? & uint8[] & rle\_meta & RLE meta-data.\\
 \cline{2-5}
 
 \multicolumn{6}{|l|}{}\\[-0.7em]
-\multicolumn{6}{|l|}{\textit{If neither \textsc{X4} or \textsc{Cat} flags are set:} } \\
+\multicolumn{6}{|l|}{\textit{If neither \textsc{Stripe} or \textsc{Cat} flags are set:} } \\
 \cline{2-5}
 & ? & uint8[] & cdata & Entropy encoded data stream (see \textsc{Order} flag) & \\
 \cline{2-5}
@@ -1287,8 +1403,8 @@ The bit-flags are defined below, but note not all combinations are permitted.
 1 & \textsc{Order} & Order-0 or Order-1 entropy coding. \\
 2 & reserved & Reserved (for possible order-2/3)\\
 4 & reserved & Reserved \\
-8 & \textsc{X4}\tnote{\textbf{a}} & 4-way interleaving of byte streams.\\
-16 & \textsc{NoSize} & original size is not recorded (for use by X4)\\
+8 & \textsc{Stripe}\tnote{\textbf{a}} & N-way interleaving of byte streams.\\
+16 & \textsc{NoSize} & original size is not recorded (for use by \textsc{Stripe})\\
 32 & \textsc{Cat} & Data is uncompressed\\
 64 & \textsc{RLE} & Run length encoding, with runs and literals encoded separately\\
 128 & \textsc{Pack} & Pack 2, 4, 8 or infinite symbols per byte.\\
@@ -1318,8 +1434,8 @@ yield the original uncompressed data.
   \If{$flags \bitand$ \textsc{NoSize} $\ne 0$}
     \State $len \gets$\Call{ReadUint7}{}
   \EndIf
-  \If{$flags \bitand$ \textsc{X4}}
-    \State $data \gets $\Call{RansDecodeX4}{$len$}
+  \If{$flags \bitand$ \textsc{Stripe}}
+    \State $data \gets $\Call{RansDecodeStripe}{$len$}
     \State \Return $data$
   \EndIf{}
   \Statex \Comment{Read meta-data}
@@ -1353,12 +1469,12 @@ yield the original uncompressed data.
 The specifics of each sub-format are described below, in the order (minus meta-data specific shuffling) they are applied.
 
 \begin{itemize}
-\item{\textbf{\textsc{X4}}:}
-rANS 4x16 with 4-way interleaving (see Section~\ref{sec:ransX4}).
+\item{\textbf{\textsc{Stripe}}:}
+rANS 4x16 with N-way interleaving (see Section~\ref{sec:ransstripe}).
 
 \item{\textbf{\textsc{NoSize}}:}
 Do not store the size of the uncompressed data stream.
-This information is not required when the data stream is one of the four sub-streams in the X4 format.
+This information is not required when the data stream is one of the four sub-streams in the \textsc{Stripe} format.
 
 \item{\textbf{\textsc{Cat}}:}
 If present, the order bit flag is ignored.
@@ -1787,10 +1903,10 @@ context for the run length does not change.
 \EndFunction
 \end{algorithmic}
 
-\subsection{General Purpose Entropy Encoder}
+%\subsection{General Purpose Entropy Encoder}
 
 We wrap up the Order-0 and 1 entropy encoder, both with and without run length encoding, into a data stream that specifies the type of encoded data and also permits a number of additional transformations to be applied.
-These transformations support bit packing (for example a data block with only 4 distinct values can be packed with 4 values per byte), no-op for tiny data blocks where entropy encoding would grow the data and 4-way interleaving of the 8-bit components of a 32-bit value.
+These transformations support bit packing (for example a data block with only 4 distinct values can be packed with 4 values per byte), no-op for tiny data blocks where entropy encoding would grow the data and N-way interleaving of the 8-bit components of a 32-bit value.
 
 \begin{table}[h]
 \centering
@@ -1808,32 +1924,27 @@ These transformations support bit packing (for example a data block with only 4 
 \cline{2-5}
 
 \multicolumn{6}{|l|}{}\\[-0.3em]
-\multicolumn{6}{|l|}{\textit{If \textsc{X4} flag is set:} } \\
+\multicolumn{6}{|l|}{\textit{If \textsc{Stripe} flag is set:} } \\
 \cline{2-5}
-& ? & uint7 & clen1 & Compressed sub-block length 1 & \\
-& ? & uint7 & clen2 & Compressed sub-block length 2 & \\
-& ? & uint7 & clen3 & Compressed sub-block length 3 & \\
-& ? & uint7 & clen4 & Compressed sub-block length 4 & \\
-& ? & uint8[] & cdata1 & Compressed data sub-block 1 (recurse) & \\
-& ? & uint8[] & cdata2 & Compressed data sub-block 2 (recurse) & \\
-& ? & uint8[] & cdata3 & Compressed data sub-block 3 (recurse) & \\
-& ? & uint8[] & cdata4 & Compressed data sub-block 4 (recurse) & \\
+& ? & uint8 & N & Number of sub-streams & \\
+& ? & uint7[] & clen[] & N copies of compressed sub-block length & \\
+& ? & uint8[] & cdata[] & N copies of Compressed data sub-block (recurse) & \\
 \cline{2-5}
 
 \multicolumn{6}{|l|}{}\\[-0.7em]
-\multicolumn{6}{|l|}{\textit{If \textsc{Cat} flag is set (and \textsc{X4} flag is unset):} } \\
+\multicolumn{6}{|l|}{\textit{If \textsc{Cat} flag is set (and \textsc{Stripe} flag is unset):} } \\
 \cline{2-5}
 & ? & uint8[] & udata & Uncompressed data stream & \\
 \cline{2-5}
 
 \multicolumn{6}{|l|}{}\\[-0.7em]
-\multicolumn{6}{|l|}{\textit{If \textsc{Pack} flag is set (and neither \textsc{X4} or \textsc{Cat} flags are set):} } \\
+\multicolumn{6}{|l|}{\textit{If \textsc{Pack} flag is set (and neither \textsc{Stripe} or \textsc{Cat} flags are set):} } \\
 \cline{2-5}
 & ? & uint8[] & pack\_meta & Pack lookup table & \\
 \cline{2-5}
 
 \multicolumn{6}{|l|}{}\\[-0.7em]
-\multicolumn{6}{|l|}{\textit{If neither \textsc{X4} or \textsc{Cat} flags are set:} } \\
+\multicolumn{6}{|l|}{\textit{If neither \textsc{Stripe} or \textsc{Cat} flags are set:} } \\
 \cline{2-5}
 & ? & uint8[] & cdata & Entropy encoded data stream (see \textsc{Order} / \textsc{RLE} / \textsc{Ext} flags) & \\
 \cline{2-5}
@@ -1853,8 +1964,8 @@ The bit-flags are defined below, but note not all combinations are permitted.
 1 & \textsc{Order}\tnote{\textbf{a}} & Order-0 or Order-1 entropy coding. \\
 2 & reserved & Reserved (for possible order-2/3)\\
 4 & \textsc{Ext} & ``External'' compression via bzip2\\
-8 & \textsc{X4}\tnote{\textbf{b}} & 4-way interleaving of byte streams.\\
-16 & \textsc{NoSize} & original size is not recorded (used by X4)\\
+8 & \textsc{Stripe}\tnote{\textbf{b}} & N-way interleaving of byte streams.\\
+16 & \textsc{NoSize} & original size is not recorded (used by \textsc{Stripe})\\
 32 & \textsc{Cat}\tnote{\textbf{b}} & Data is uncompressed\\
 64 & \textsc{RLE}\tnote{\textbf{a}} & Run length encoding, with runs and literals encoded separately\\
 128 & \textsc{Pack} & Pack 2, 4, 8 or infinite symbols per byte.\\
@@ -1867,12 +1978,13 @@ The bit-flags are defined below, but note not all combinations are permitted.
 \end{tablenotes}
 \end{threeparttable}
 
-Of these X4 is the most complex.
-The uncompressed data must be a multiple of four bytes long.
-Each $4{th}$ byte is sent to its own stream producing 4 interleaved streams, so the $1^{st}$ stream will hold data from byte 0, 4, 8, etc while the $2^{nd}$ stream will hold data from byte 1, 5, 9, etc.
-Each of those four streams is then itself compressed using this compression format.
+Of these \textsc{Stripe} is the most complex.
+As with the rANS4x16 encoder, the data is rearranged such that every
+$N^{th}$ byte is adjacent in a single block producing N distinct sub-blocks.
+Each of the N streams is then itself compressed using this compression format.
+
 For example an input block of small unsigned 32-bit little-endian numbers may use RLE for the first three streams as they are mostly zero, and a non-RLE Order-0 entropy encoder of the last stream.
-Normally our data format will include the decoded size, but with X4 we can omit this from the internal four compressed streams as we know they will each be a quarter of the outer stream.
+Normally our data format will include the decoded size, but with \textsc{Stripe} we can omit this from the internal compressed streams as we know their size will be a computable fraction of the combined data.
 
 The data layout differs for each of these bit types, as described below in the \textsc{ArithDecode} function.
 Some of these can be used in combination, so the order needs to be observed.
@@ -1886,8 +1998,8 @@ For example value 193 is indicates a byte stream should be decoded with an RLE a
   \If{$flags \bitand$ \textsc{NoSize} $\ne 0$}
     \State $len \gets$\Call{ReadUint7}{}
   \EndIf
-  \If{$flags \bitand$ \textsc{X4}}
-    \State $data \gets $\Call{DecodeX4}{$len$}
+  \If{$flags \bitand$ \textsc{Stripe}}
+    \State $data \gets $\Call{DecodeSTRIPE}{$len$}
     \State \Return $data$
   \EndIf{}
   \If{$flags \bitand$ \textsc{Pack}}
@@ -1923,36 +2035,40 @@ For example value 193 is indicates a byte stream should be decoded with an RLE a
 The specifics of each sub-format are described below, in the order (minus meta-data specific shuffling) they are applied.
 
 \begin{itemize}
-\item{\textbf{\textsc{X4}}:}
-The byte stream consists of a 7-bit encoded uncompressed length, which
-must be a multiple of 4, followed by 4 compressed lengths also 7-bit
-encoded.  Each of these compressed byte streams is then itself a valid
-$cdata$ stream and will recurse again, each starting with their own
-format flag.  The total uncompressed byte stream is then an
-interleaving of one byte in turn from each of the 4 substreams (in
-order of 1st to 4th).  Thus an array of 32-bit unsigned integers could
-be unpacked using X4 to compress each of the 8-bit components together
-with their own algorithm.
+\item{\textbf{\textsc{Stripe}}:}
+The byte stream consists of a 7-bit encoded uncompressed length and a
+byte holding the number of substreams $N$, and their 7-bit encoded
+compressed data streams lengths.  This is then followed by the
+substreams themselves, each of which is a valid $cdata$ stream as
+defined above, hence this offers a recursive mechanism as each
+substream has its own format byte.
+
+The total uncompressed byte stream is then an interleaving of one byte
+in turn from each of the N substreams (in order of 1st to Nth).  Thus
+an array of 32-bit unsigned integers could be unpacked using
+\textsc{Stripe} to compress each of the 4 8-bit components together with
+their own algorithm.
 
 \begin{algorithmic}[1]
-\Function{DecodeX4}{$len$}
-  % \State $ulen \gets $\Call{ReadUint7}{}
-  \State $plen \gets out\_len / 4$
-  \For{$i \gets 0$ to $3$} \Comment{Fetch 4 compressed lengths}
-    \State $clen_i \gets $\Call{ReadUint7}{}
+\Function{RansDecodeStripe}{$len$}
+  \State $N \gets $\Call{ReadUint8}{}
+  \For{$j \gets 0$ to $N$} \Comment{Fetch N compressed lengths}
+    \State $clen_j \gets $\Call{ReadUint7}{}
   \EndFor
-  \State $X0 \gets $\Call{ArithDecode}{$plen$} \Comment{Decode 4 streams}
-  \State $X1 \gets $\Call{ArithDecode}{$plen$}
-  \State $X2 \gets $\Call{ArithDecode}{$plen$}
-  \State $X3 \gets $\Call{ArithDecode}{$plen$}
   \Statex
-  \State $i \gets 0$
-  \For{$j \gets 0$ to $plen-1$} \Comment{Interleave}
-    \State $out_{i+0} \gets X0_j$
-    \State $out_{i+1} \gets X1_j$
-    \State $out_{i+2} \gets X2_j$
-    \State $out_{i+3} \gets X3_j$
-    \State $i \gets i+4$
+  \For{$j \gets 0$ to $N$} \Comment{Decode N streams}
+    \State $ulen_j \gets (len \bdiv N) + ((len \bmod N) > j)$
+\Comment{$(x > y)$ expression being 1 if true, 0 if false}
+    \State $T_j \gets $\Call{ArithDecode}{$ulen_j$}
+  \EndFor
+  \Statex
+%  \For{$i \gets 0$ to $len - 1$} \Comment{Interleave}
+%    \State $out_i \gets T_{(i \bmod N),\ (i \bdiv N)}$
+%  \EndFor
+  \For{$j \gets 0$ to $N - 1$} \Comment{Interleave}
+    \For{$i \gets 0$ to $ulen_j - 1$}
+      \State $out_{i \times N + j} \gets T_{j,i}$
+    \EndFor
   \EndFor
   \State \Return $out$
 \EndFunction
@@ -1960,7 +2076,7 @@ with their own algorithm.
 
 \item{\textbf{\textsc{NoSize}}:}
 Do not store the size of the uncompressed data stream.
-This information is not required when the data stream is one of the four sub-streams in the X4 format.
+This information is not required when the data stream is one of the four sub-streams in the \textsc{Stripe} format.
 
 \item{\textbf{\textsc{Cat}}:}
 If present, all other bit flags should be nul, with the possible
@@ -1981,7 +2097,7 @@ Instead of using the adaptive arithmetic coder for decompression (with or withou
 Currently the only supported such codec is Bzip2.
 In future more may be added, so the magic number \emph{must} be validated to check the codec being used.
 
-Given bzip2 is already supported elsewhere in CRAM, the purpose of adding it here is to permit bzip2 compression after PACK and X4 transformations.
+Given bzip2 is already supported elsewhere in CRAM, the purpose of adding it here is to permit bzip2 compression after \textsc{Pack} and \textsc{Stripe} transformations.
 This may be tidied up in later CRAM releases to clarify the separation between compression codecs and data transforms, but that requires more major restructuring so for compatibility with v3.0 these have been placed into this single codec.
 
 \begin{algorithmic}[1]
