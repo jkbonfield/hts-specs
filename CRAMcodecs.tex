@@ -860,11 +860,13 @@ frequencies are followed by a run length to omit adjacent zeros.
 
 The order-1 frequency table itself may still be quite large, so is
 optionally compressed using the order-0 rANS4x16 codec.  This is
-specified in the first byte.  If this is 1, it is followed by 7-bit
-encoded uncompressed and compressed lengths and then the compressed
-frequency data.  The pseudocode here differs slightly to elsewhere as
-it indicates the input sources, which are either the uncompressed
-frequency buffer or the default (unspecified) source.
+specified in the bottom bit of the first byte.  If this is 1, it is
+followed by 7-bit encoded uncompressed and compressed lengths and then
+the compressed frequency data.  The pseudocode here differs slightly
+to elsewhere as it indicates the input sources, which are either the
+uncompressed frequency buffer or the default (unspecified) source.
+The top 4 bits of the first byte indicate the number of bits used for
+the frequency tables.  Permitted values are 10 and 12.
 
 % Should we just have a generic INPUT buffer so we can use either
 % unspecified inputs or specified ones?
@@ -872,9 +874,10 @@ frequency buffer or the default (unspecified) source.
 \begin{algorithmic}[1]
 \Statex (Reads a table of Order-1 symbol frequencies $F_{i,j}$
 \Statex (and sets the cumulative frequency table $C_{i,j+1} = C_{i,j}+F_{i,j}$)
-\Procedure{ReadFrequencies4x16\_1}{$F, C$}
+\Procedure{ReadFrequencies4x16\_1}{$F, C, bits$}
 \State $comp \gets$ \Call{ReadUint8}{}
-\If{$comp > 0$}
+\State $bits \gets comp \shiftr 4$
+\If{$(comp \logand 1) \ne 0$}
   \State $u\_size \gets$ \Call{ReadUint7}{} \Comment{Uncompressed size}
   \State $c\_size \gets$ \Call{ReadUint7}{} \Comment{Compressed size}
   \State $c\_data \gets$ \Call{ReadData}{$c\_size$}
@@ -897,7 +900,7 @@ frequency buffer or the default (unspecified) source.
       \EndIf
     \EndIf
   \EndForeach
-  \State \Call{NormaliseFrequencies4x16\_0}{$F_i$, $10$}
+  \State \Call{NormaliseFrequencies4x16\_0}{$F_i$, $bits$}
   \State
   \State $C_{i,0} \gets 0$
   \For{$j\gets 0 \algorithmicto 255$}
@@ -951,7 +954,8 @@ renormalisation instead of a loop using 8-bit values.
 
 The Order-1 code is comparable to Order-0 but with an extra dimension
 (the previous value) to the $F$ and $C$ matrices and a more complex
-system for storing the frequencies.
+system for storing the frequencies.  The frequencies may also add up
+to either 1024 or 4096 (10 or 12 bits).
 
 The 4 rANS streams aren't interleaved either, but in distinct regions.
 This makes the handling of data that isn't a multiple of 4 is a little
@@ -959,7 +963,7 @@ more complex too.
 
 \begin{algorithmic}[1]
 \Function{RansDecode4x16\_1}{$len$}
-  \State \Call{ReadFrequencies4x16\_1}{$F$, $C$}
+  \State \Call{ReadFrequencies4x16\_1}{$F$, $C$, $bits$}
   \For{$j \gets 0 \algorithmicto 3$}
     \State $R_j \gets$ \Call{ReadUint32}{}
     \State $L_j \gets 0$
@@ -967,20 +971,20 @@ more complex too.
   \Statex (The primary unrollable loop)
   \For{$i\gets 0 \algorithmicto \lfloor len/4 \rfloor - 1$}
     \For{$j\gets 0 \algorithmicto 3$}
-        \State $f \gets$ \Call{RansGetCumulativeFreq4x16}{$R_j,\ 10$}
+        \State $f \gets$ \Call{RansGetCumulativeFreq4x16}{$R_j,\ bits$}
       \State $s \gets$ \Call{RansGetSymbolFromFreq}{$C_{L_j},\ f$}
       \State $out_{i + j \times \lfloor len/4 \rfloor} \gets s$
-      \State $R_j \gets$\ \Call{RansAdvanceStep4x16}{$R_j,\ C_{L_j, s},\ F_{L_j, s},\ 10$}
+      \State $R_j \gets$\ \Call{RansAdvanceStep4x16}{$R_j,\ C_{L_j, s},\ F_{L_j, s},\ bits$}
       \State $R_j \gets$\ \Call{RansRenorm4x16}{$R_j$}
       \State $L_j \gets s$
     \EndFor
   \EndFor
   \Statex (The remainder for data not a multiple of 4 in size, using $R_3$ throughout.)
   \For{$i \gets i \times 4 \algorithmicto len-1$}
-    \State $f \gets$ \Call{RansGetCumulativeFreq4x16}{$R_3,\ 10$}
+    \State $f \gets$ \Call{RansGetCumulativeFreq4x16}{$R_3,\ bits$}
     \State $s \gets$ \Call{RansGetSymbolFromFreq}{$C_{L_3},\ f$}
     \State $out_i \gets s$
-    \State $R_3 \gets$\ \Call{RansAdvanceStep4x16}{$R_3,\ C_{L_3,s},\ F_{L_3,s},\ 10$}
+    \State $R_3 \gets$\ \Call{RansAdvanceStep4x16}{$R_3,\ C_{L_3,s},\ F_{L_3,s},\ bits$}
     \State $R_3 \gets$\ \Call{RansRenorm4x16}{$R_3$}
     \State $L_3 \gets s$
   \EndFor
