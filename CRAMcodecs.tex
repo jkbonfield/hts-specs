@@ -774,13 +774,15 @@ recommended on smaller blocks of data.
 Frequencies are now stored using uint7 format instead of ITF8.  The
 tables are also stored differently, separating the list of symbols
 present in the alphabet (those with frequency greater than zero) from
-the frequencies themselves.  For the Order-1 frequency table this list
-of symbols is those used in any context, thus we only have one
-alphabet recorded for all contexts.  This means in some contexts
-some (potentially many) symbols will have zero frequency.  To reduce
-the Order-1 table size an additional zero run-length encoding step is
-used.  Finally the Order-1 frequencies may optionally be compressed
-using the Order-0 rANS Nx16 codec.
+the frequencies themselves.  The symbol list must be stored in
+ascending ASCII order, with their frequency values in the same
+ordering as their corresponding symbols.  For the Order-1 frequency
+table this list of symbols is those used in any context, thus we only
+have one alphabet recorded for all contexts.  This means in some
+contexts some (potentially many) symbols will have zero frequency.  To
+reduce the Order-1 table size an additional zero run-length encoding
+step is used.  Finally the Order-1 frequencies may optionally be
+compressed using the Order-0 rANS Nx16 codec.
 
 Frequencies must always add up to a power of 2, but do not necessarily
 have to match the final power of two used in the Order-0 (4096) and
@@ -792,13 +794,13 @@ for each context.
 \subsection{Frequency tables}
 
 \begin{algorithmic}[1]
-\Statex (Reads a list of symbols $A$ used in our alphabet)
+\Statex (Reads a set of symbols $A$ used in our alphabet)
 \Function{ReadAlphabet}{}
 \State $s \gets$ \Call{ReadUint8}{}
 \State $last\_sym \gets s$
 \State $rle \gets 0$
 \Repeat
-  \State $A \gets (A,s)$ \Comment{Append $s$ to the symbol list $A$}
+  \State $A \gets (A,s)$ \Comment{Append $s$ to the symbol set $A$}
   \If{$rle > 0$}
     \settowidth{\maxwidth}{rle\ }
     \State \algalign{rle}{\gets} $rle-1$
