@@ -491,7 +491,7 @@ by storing the end state of $x$.
 \textbf{Implementation specifics}
 
 We use an unsigned 32-bit integer to hold $x$. In encoding it is
-initialised to zero. For decoding it is read little-endian from the
+initialised to $L$. For decoding it is read little-endian from the
 input stream.
 
 Recall $freq_{i}$ is the frequency of the $i$-th symbol $s_{i}$ in alphabet
@@ -757,12 +757,11 @@ This is correct, but it is unfortunately a design oversight.
 
 CRAM version 3.1 defines an additional rANS entropy encoder, using
 16-bit renormalisation instead of the 8-bit used in CRAM 3.0 and with
-inbuilt bit-packing and run-length encoding.  The Order-1 rANS Nx16
-encoder has also been modified to use a maximum frequency of 1024
+inbuilt bit-packing and run-length encoding.  The lower-bound and
+initial encoder state $L$ is also changed to 0x8000. The Order-1 rANS
+Nx16 encoder has also been modified to permit a maximum frequency of 1024
 instead of 4096.  This offers better cache performance for the large
 Order-1 tables and usually has minimal impact on compression ratio.
-(The 4x8 rANS entropy encoder is still available if the reduced
-frequency range is a problem.)
 
 Additionally it permits adjustment of the number of interleaved rANS
 states from the fixed 4 used in rANS 4x8 to either 4 or 32 states.
