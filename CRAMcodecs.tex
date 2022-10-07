@@ -2767,7 +2767,7 @@ the decoder. The data layout is as follows.
 \multicolumn{8}{|l|}{\textit{If $have\_stab$ gflag is set:} }                                                                                                                                 \\
 \cline{2-7}
                        & \multicolumn{2}{r|}{8}        & uint8          & $max\_sel$                     & \multicolumn{2}{p{8.4cm}|}{Maximum parameter selector value} & \\
-                       & \multicolumn{2}{r|}{variable} & table          & $stab$                         & \multicolumn{2}{p{8.4cm}|}{Parameter selector table} & \\
+                       & \multicolumn{2}{r|}{variable} & array          & $stab$                         & \multicolumn{2}{p{8.4cm}|}{Parameter selector table} & \\
 \cline{2-7}
 \multicolumn{8}{|l|}{}\\
 \hline
@@ -2806,19 +2806,19 @@ the decoder. The data layout is as follows.
 & \multicolumn{6}{l|}{} & \\[-0.5em]
 \multicolumn{1}{|l|}{} & \multicolumn{6}{l|}{ \textit{If $have\_qtab$ pflag is set:} } & \\
 \cline{3-6}
-                       &  & variable                   & table          & $qtab$                         & Quality context lookup table & & \\
+                       &  & variable                   & array          & $qtab$                         & Quality context lookup table & & \\
 \cline{3-6}
 
 & \multicolumn{6}{l|}{} & \\[-0.5em]
 \multicolumn{1}{|l|}{} & \multicolumn{6}{l|}{ \textit{If $have\_tab$ pflag is set:} } & \\
 \cline{3-6}
-                       &  & variable                   & table          & $ptab$                         & Position context lookup table & & \\
+                       &  & variable                   & array          & $ptab$                         & Position context lookup table & & \\
 \cline{3-6}
 
 & \multicolumn{6}{l|}{} & \\[-0.5em]
 \multicolumn{1}{|l|}{} & \multicolumn{6}{l|}{ \textit{If $have\_tab$ pflag is set:} } & \\
 \cline{3-6}
-                       &  & variable                   & table          & $dtab$                         & Delta context lookup table & & \\
+                       &  & variable                   & array          & $dtab$                         & Delta context lookup table & & \\
 \cline{3-6}
 & \multicolumn{6}{l|}{} & \\
 \cline{2-7}
@@ -2918,7 +2918,7 @@ the parameter block.
   \State \algalign{p.ploc}{\gets} $x \bdiv 16$
   \State \algalign{p.dloc}{\gets} $x \bmod 16$
 
-  \If{$p.flags\bitand 1$} \Comment{Have qmap}
+  \If{$p.flags\bitand 16$} \Comment{Have qmap}
     \For{$i \gets 0$ to $p.max\_sym-1$}
       \State $p.qmap_i \gets$ \Call{ReadUint8}{}
     \EndFor
@@ -2932,12 +2932,12 @@ the parameter block.
     \EndFor
   \EndIf
 
-  \If{$p.flags\bitand 16$} \Comment{Have ptab}
+  \If{$p.flags\bitand 32$} \Comment{Have ptab}
     \State $p.ptab \gets$ \Call{ReadArray}{$1024$}
   \EndIf
 
   \If{$p.flags\bitand 64$} \Comment{Have dtab}
-    \State $p.qtab \gets$ \Call{ReadArray}{$256$}
+    \State $p.dtab \gets$ \Call{ReadArray}{$256$}
   \EndIf
 
   \State \Return $p$
