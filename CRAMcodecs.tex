@@ -101,7 +101,7 @@ last modified on the date shown above.
 %\newcommand{\concat}{\ensuremath{+\!\!\!\!+\,}}
 \makeatother
 
-\section{introduction}
+\section{Introduction}
 
 This document covers the compression and decompression algorithms
 (codecs) specific to the CRAM format.  All bar the first of these were
@@ -867,7 +867,7 @@ where a symbol is present in one context but not in others, all zero
 frequencies are followed by a run length to omit adjacent zeros.
 
 The order-1 frequency table itself may still be quite large, so is
-optionally compressed using the order-0 rANSNx16 codec with a fixed
+optionally compressed using the order-0 rANS Nx16 codec with a fixed
 4-way interleaving.
 This is specified in the bottom bit of the first byte.  If this is 1, it is
 followed by 7-bit encoded uncompressed and compressed lengths and then
@@ -1031,7 +1031,7 @@ and the run-removed data itself.
 The meta-data format starts with the count of symbols which have runs
 associated with them (zero being interpreted as all of them) and the
 list of these symbol values.  This is followed by the run lengths
-encoded as variable sized integers in the \emph{int7} format.
+encoded as variable sized integers in the \emph{uint7} format.
 
 \begin{algorithmic}[1]
 \Statex (Reads and optionally uncompresses the blob of run-lengths and the array $L$)
@@ -1105,8 +1105,8 @@ The packed format is split into uncompressed meta-data (below) and the compresse
 \textbf{Bytes} & \textbf{Type} & \textbf{Name} & \textbf{Description}\\
 \hline
 1      & byte   & $nsym$ & Number of distinct symbols\\
-$nsym$ & byte[] & $syms$ & Symbol map \\
--?     & int7   & $len$  & Length of packed data
+$nsym$ & byte[] & $P$    & Symbol map \\
+-?     & uint7  & $len$  & Length of packed data
 \end{tabular}
 \end{table}
 
@@ -1431,7 +1431,7 @@ After decoding, these transforms are applied in order of RLE followed
 by unpack as required and in that order.
 
 For example a $flag$ data-format value of 197 indicates a byte stream
-should decode the pack meta-data, the RLE meta-data and the compressed
+should decode the pack meta-data, the RLE meta-data and the Order-1 compressed
 data itself, all using 32 rANS states, and then apply the RLE followed
 by Unpack transforms to yield the original uncompressed data.
 
@@ -1996,7 +1996,7 @@ The bit-flags are defined below, but note not all combinations are permitted.
 \end{threeparttable}
 
 Of these \textsc{Stripe} is the most complex.
-As with the rANSNx16 encoder, the data is rearranged such that every
+As with the rANS Nx16 encoder, the data is rearranged such that every
 $N^{th}$ byte is adjacent in a single block producing N distinct sub-blocks.
 Each of the N streams is then itself compressed using this compression format.
 
@@ -2395,7 +2395,7 @@ order to determine when the token types finish.
 \hline
 \multicolumn{3}{|r|}{4} & uint32 & $uncomp\_length$ & Length of uncompressed name buffer\\
 \multicolumn{3}{|r|}{4} & uint32 & $num\_reads$ & Number of read names\\
-\multicolumn{3}{|r|}{1} & uint8  & $use\_arith$ & Whether compression is arithmetic (1) or rANSNx16 (0)\\
+\multicolumn{3}{|r|}{1} & uint8  & $use\_arith$ & Whether compression is arithmetic (1) or rANS Nx16 (0)\\
 \hline
 \multicolumn{6}{|l|}{\quad\textit{For each token data stream}}\\
 \cline{2-6}
@@ -2532,7 +2532,7 @@ Both reversed and duplication models have no context and are boolean
 values.
 
 The parameter selector model also has no context associated with it
-and encodes $max\_sel$ distrinct values.  The selector value may be
+and encodes $max\_sel$ distinct values.  The selector value may be
 quantised further using $stab$ to reduce the selector to fewer
 sets of parameters.  This is useful if we wish to use the selector
 bits directly in the context using the same parameters.  The selector
@@ -2798,7 +2798,7 @@ the decoder. The data layout is as follows.
 \cline{2-7}
 
 & \multicolumn{6}{l|}{} & \\[-0.7em]
-\multicolumn{1}{|l|}{} & \multicolumn{6}{l|}{ \textit{If $have\_map$ pflag is set:} } & \\
+\multicolumn{1}{|l|}{} & \multicolumn{6}{l|}{ \textit{If $have\_qmap$ pflag is set:} } & \\
 \cline{3-6}
                        &  & variable                   & uint8[$max\_sym$]          & $qmap$             & Map for unbinning quality values. & & \\
 \cline{3-6}
@@ -3127,7 +3127,7 @@ elsewhere).
       \State $output_i \gets q$
     \EndIf
     \Statex
-    \State $ctx \gets $\Call{FQZUpdateContext}{$param, q$}\Comment{Also updates qlast, prevq and delta}
+    \State $ctx \gets $\Call{FQZUpdateContext}{$param, q$}\Comment{Also updates qctx, prevq and delta}
     \Statex
     \State $i \gets i + 1$
     \State $pos \gets pos - 1$
